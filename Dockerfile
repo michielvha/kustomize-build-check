@@ -30,9 +30,9 @@ RUN wget -O /tmp/helm.tar.gz \
     rm -rf /tmp/helm.tar.gz /tmp/linux-${TARGETARCH} && \
     chmod +x /usr/local/bin/helm
 
-# Create a non-root user with a fixed UID and group ID
-RUN addgroup -g 1000 ${IMAGE_NAME} && \
-    adduser -D -u 1000 -G ${IMAGE_NAME} ${IMAGE_NAME}
+# Create a non-root user with UID 1001 to match GitHub Actions runner
+RUN addgroup -g 1001 ${IMAGE_NAME} && \
+    adduser -D -u 1001 -G ${IMAGE_NAME} ${IMAGE_NAME}
 
 # Configure git to trust any directory (safe for container use)
 # This must be done as root before switching to non-root user

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/michielvha/kustomize-build-check/internal/analyzer"
 	"github.com/michielvha/kustomize-build-check/internal/builder"
@@ -16,14 +15,6 @@ import (
 func main() {
 	fmt.Println("🔍 Kustomize Build Check")
 	fmt.Println()
-
-	// Configure git to trust the GitHub workspace directory
-	// This is needed when running in a Docker container where the workspace
-	// is mounted from the host (ownership mismatch)
-	if err := configureGitSafeDirectory(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to configure git safe.directory: %v\n", err)
-		// Continue anyway, might work
-	}
 
 	// Read inputs from environment (GitHub Actions sets INPUT_* vars)
 	baseRef := getEnv("INPUT_BASE-REF", "")
@@ -105,27 +96,4 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
-}
-
-// configureGitSafeDirectory adds the current workspace to git's safe.directory config
-// This is necessary when running in Docker containers where the workspace is mounted
-func configureGitSafeDirectory() error {
-	// In GitHub Actions, the workspace is always /github/workspace in Docker containers
-	workspacePath := "/github/workspace"
-
-	// Check if we're actually in a GitHub Actions Docker environment
-	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
-		// Not in GitHub Actions Docker container, use current directory
-		workspacePath, err = os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get working directory: %w", err)
-		}
-	}
-
-	cmd := exec.Command("git", "config", "--global", "--add", "safe.directory", workspacePath)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git config failed: %w", err)
-	}
-
-	return nil
 }
