@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/michielvha/kustomize-build-check/internal/analyzer"
@@ -13,6 +14,10 @@ import (
 )
 
 func main() {
+	// Configure logging based on LOG_LEVEL environment variable
+	// Supported values: DEBUG, INFO, WARN, ERROR (default: INFO)
+	setupLogging()
+
 	fmt.Println("🔍 Kustomize Build Check")
 	fmt.Println()
 
@@ -96,4 +101,35 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// setupLogging configures the global logger based on LOG_LEVEL environment variable
+func setupLogging() {
+	logLevel := getEnv("LOG_LEVEL", "INFO")
+	
+	var level slog.Level
+	switch logLevel {
+	case "DEBUG":
+		level = slog.LevelDebug
+	case "INFO":
+		level = slog.LevelInfo
+	case "WARN", "WARNING":
+		level = slog.LevelWarn
+	case "ERROR":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+	
+	// Create a text handler with the specified level
+	opts := &slog.HandlerOptions{
+		Level: level,
+	}
+	handler := slog.NewTextHandler(os.Stderr, opts)
+	logger := slog.New(handler)
+	
+	// Set as default logger
+	slog.SetDefault(logger)
+	
+	slog.Debug("Logging configured", "level", logLevel)
 }

@@ -62,6 +62,34 @@ export INPUT_ROOT-DIR="."
 
 # Run the binary
 ./kustomize-build-check
+
+# Enable debug logging
+LOG_LEVEL=DEBUG ./kustomize-build-check
+```
+
+### Logging
+
+The tool supports structured logging with configurable log levels via the `LOG_LEVEL` environment variable:
+
+- **`INFO`** (default): Shows standard progress output
+- **`DEBUG`**: Detailed execution information including:
+  - Dependency graph construction
+  - Impact analysis decisions
+  - File processing steps
+  - Kustomize build commands and results
+- **`WARN`**: Warnings only
+- **`ERROR`**: Errors only
+
+**Example with debug logging:**
+```bash
+LOG_LEVEL=DEBUG ./kustomize-build-check
+```
+
+This will show detailed logs like:
+```
+time=2025-11-06T22:23:21.497+01:00 level=DEBUG msg="Building dependency graph" kustomization_count=23
+time=2025-11-06T22:23:21.497+01:00 level=DEBUG msg="Found dependencies" kustomization=/path/to/overlay dependencies=[../../base]
+time=2025-11-06T22:23:21.497+01:00 level=DEBUG msg="Added reverse lookup" base=/path/to/base dependent=/path/to/overlay
 ```
 
 ### Project Structure

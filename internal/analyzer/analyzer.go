@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -30,19 +31,35 @@ func (a *analyzer) GetAffectedKustomizations(
 	g graph.Graph,
 	allKustomizations []discovery.KustomizeFile,
 ) []string {
+	slog.Debug("Analyzing impact of changed files", "changed_files_count", len(changedFiles))
+	
 	affected := make(map[string]bool)
 
 	for _, changedFile := range changedFiles {
+		slog.Debug("Processing changed file", "file", changedFile)
+		
 		// Check if the changed file is a kustomization file itself
 		if isKustomizationFile(filepath.Base(changedFile)) {
 			dir := filepath.Dir(changedFile)
-			a.addAffected(dir, g, affected)
+			// Convert to absolute path to match graph nodes
+			absDir, err := filepath.Abs(dir)
+			if err != nil {
+				// Fall back to relative if abs fails
+				absDir = dir
+			}
+			slog.Debug("Changed file is kustomization file", 
+				"file", changedFile, 
+				"dir", absDir)
+			a.addAffected(absDir, g, affected)
 			continue
 		}
 
 		// Check if the changed file is referenced by any kustomization
 		for _, kust := range allKustomizations {
 			if a.fileReferencedByKustomization(changedFile, kust) {
+				slog.Debug("Changed file referenced by kustomization", 
+					"file", changedFile, 
+					"kustomization", kust.Dir)
 				a.addAffected(kust.Dir, g, affected)
 			}
 		}
@@ -54,6 +71,9 @@ func (a *analyzer) GetAffectedKustomizations(
 		result = append(result, path)
 	}
 
+	slog.Debug("Impact analysis complete", 
+		"affected_kustomizations", len(result))
+
 	return result
 }
 
@@ -63,13 +83,23 @@ func (a *analyzer) addAffected(dir string, g graph.Graph, affected map[string]bo
 
 	// Always add the directly affected kustomization
 	affected[dir] = true
+	slog.Debug("Added affected kustomization", "path", dir)
 
 	// Recursively add all kustomizations that depend on this one
 	// This catches the full impact chain: if a base changes, test all overlays,
 	// and if those overlays are also bases, test their dependents too
 	dependents := g.GetAllDependents(dir)
+	
+	if len(dependents) > 0 {
+		slog.Debug("Adding dependents to affected set", 
+			"base", dir, 
+			"dependent_count", len(dependents))
+	}
+	
 	for _, dependent := range dependents {
-		affected[filepath.Clean(dependent)] = true
+		cleanDep := filepath.Clean(dependent)
+		affected[cleanDep] = true
+		slog.Debug("Added dependent to affected set", "path", cleanDep)
 	}
 }
 

@@ -3,6 +3,7 @@ package builder
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"time"
 )
@@ -43,6 +44,11 @@ func (b *builder) Build(path string, enableHelm bool) BuildResult {
 	}
 	args = append(args, path)
 
+	slog.Debug("Starting kustomize build", 
+		"path", path, 
+		"enable_helm", enableHelm,
+		"args", args)
+
 	cmd := exec.Command("kustomize", args...)
 
 	var stdout, stderr bytes.Buffer
@@ -51,6 +57,7 @@ func (b *builder) Build(path string, enableHelm bool) BuildResult {
 
 	// Set timeout
 	timer := time.AfterFunc(b.timeout, func() {
+		slog.Warn("Kustomize build timeout, killing process", "path", path)
 		_ = cmd.Process.Kill() // Ignore error, process might have already exited
 	})
 	defer timer.Stop()
@@ -59,6 +66,10 @@ func (b *builder) Build(path string, enableHelm bool) BuildResult {
 	duration := time.Since(start)
 
 	if err != nil {
+		slog.Debug("Kustomize build failed", 
+			"path", path, 
+			"duration", duration,
+			"error", err)
 		return BuildResult{
 			Path:     path,
 			Success:  false,
@@ -68,6 +79,10 @@ func (b *builder) Build(path string, enableHelm bool) BuildResult {
 		}
 	}
 
+	slog.Debug("Kustomize build succeeded", 
+		"path", path, 
+		"duration", duration)
+	
 	return BuildResult{
 		Path:     path,
 		Success:  true,

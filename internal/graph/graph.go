@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -40,6 +41,8 @@ func New() Graph {
 
 // Build constructs the dependency graph from discovered kustomization files
 func (g *DependencyGraph) Build(files []discovery.KustomizeFile) error {
+	slog.Debug("Building dependency graph", "kustomization_count", len(files))
+	
 	// First pass: create all nodes
 	for _, file := range files {
 		g.nodes[file.Dir] = &Node{
@@ -47,6 +50,7 @@ func (g *DependencyGraph) Build(files []discovery.KustomizeFile) error {
 			IsBase:       false,
 			Dependencies: []string{},
 		}
+		slog.Debug("Created node", "path", file.Dir)
 	}
 
 	// Second pass: establish dependencies
@@ -55,6 +59,10 @@ func (g *DependencyGraph) Build(files []discovery.KustomizeFile) error {
 
 		node := g.nodes[file.Dir]
 		node.Dependencies = deps
+
+		if len(deps) > 0 {
+			slog.Debug("Found dependencies", "kustomization", file.Dir, "dependencies", deps)
+		}
 
 		// For each dependency, mark it as a base and add reverse lookup
 		for _, dep := range deps {
@@ -66,10 +74,21 @@ func (g *DependencyGraph) Build(files []discovery.KustomizeFile) error {
 			if depNode, exists := g.nodes[absDepPath]; exists {
 				depNode.IsBase = true
 				g.reverseLookup[absDepPath] = append(g.reverseLookup[absDepPath], file.Dir)
+				slog.Debug("Added reverse lookup", 
+					"base", absDepPath, 
+					"dependent", file.Dir)
+			} else {
+				slog.Debug("Dependency not found in discovered kustomizations", 
+					"dependency", absDepPath, 
+					"referenced_by", file.Dir)
 			}
 		}
 	}
 
+	slog.Debug("Dependency graph built", 
+		"total_nodes", len(g.nodes), 
+		"bases", len(g.reverseLookup))
+	
 	return nil
 }
 
@@ -119,6 +138,8 @@ func (g *DependencyGraph) GetAllDependents(path string) []string {
 	visited := make(map[string]bool)
 	result := []string{}
 
+	slog.Debug("Finding all dependents", "path", path)
+
 	// Recursive helper function
 	var collectDependents func(currentPath string)
 	collectDependents = func(currentPath string) {
@@ -126,11 +147,16 @@ func (g *DependencyGraph) GetAllDependents(path string) []string {
 
 		// Get direct dependents
 		if dependents, exists := g.reverseLookup[currentPath]; exists {
+			slog.Debug("Found direct dependents", 
+				"path", currentPath, 
+				"dependents", dependents)
+			
 			for _, dependent := range dependents {
 				dependent = filepath.Clean(dependent)
 
 				// Avoid cycles
 				if visited[dependent] {
+					slog.Debug("Skipping already visited dependent", "path", dependent)
 					continue
 				}
 
@@ -144,6 +170,11 @@ func (g *DependencyGraph) GetAllDependents(path string) []string {
 	}
 
 	collectDependents(path)
+	
+	slog.Debug("All dependents found", 
+		"path", path, 
+		"total_dependents", len(result))
+	
 	return result
 }
 
