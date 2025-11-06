@@ -57,19 +57,19 @@ func (a *analyzer) GetAffectedKustomizations(
 	return result
 }
 
-// addAffected adds a kustomization and potentially its dependents to the affected set
+// addAffected adds a kustomization and all its dependents to the affected set
 func (a *analyzer) addAffected(dir string, g graph.Graph, affected map[string]bool) {
 	dir = filepath.Clean(dir)
 
-	// If this is a base, test all overlays that depend on it
-	if g.IsBase(dir) {
-		overlays := g.GetDependentOverlays(dir)
-		for _, overlay := range overlays {
-			affected[filepath.Clean(overlay)] = true
-		}
-	} else {
-		// If it's an overlay, just test it
-		affected[dir] = true
+	// Always add the directly affected kustomization
+	affected[dir] = true
+
+	// Recursively add all kustomizations that depend on this one
+	// This catches the full impact chain: if a base changes, test all overlays,
+	// and if those overlays are also bases, test their dependents too
+	dependents := g.GetAllDependents(dir)
+	for _, dependent := range dependents {
+		affected[filepath.Clean(dependent)] = true
 	}
 }
 
