@@ -1,0 +1,60 @@
+name: Kustomize Validation with Kubeconform
+
+on:
+  pull_request:
+    paths:
+      - 'kubernetes/**/*.yaml'
+      - 'kubernetes/**/*.yml'
+    branches:
+      - main
+      - develop
+
+jobs:
+  kustomize-build:
+    name: Validate Kustomize Builds
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Kustomize Build Check
+        id: kustomize-check
+        uses: michielvha/kustomize-build-check@v1
+        with:
+          enable-helm: true
+          root-dir: kubernetes/
+          fail-on-error: true
+      
+      - name: Print Results
+        if: always()
+        run: |
+          echo "Successful builds: ${{ steps.kustomize-check.outputs.success-count }}"
+          echo "Failed builds: ${{ steps.kustomize-check.outputs.failed-count }}"
+  
+  kubeconform:
+    name: Validate Kubernetes Schemas
+    runs-on: ubuntu-latest
+    needs: kustomize-build  # Only run if kustomize builds succeed
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Kustomize
+        uses: imranismail/setup-kustomize@v2
+      
+      - name: Setup Kubeconform
+        run: |
+          wget https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar xf kubeconform-linux-amd64.tar.gz
+          sudo mv kubeconform /usr/local/bin/
+      
+      - name: Validate with Kubeconform
+        run: |
+          for overlay in kubernetes/overlays/*/; do
+            echo "Validating $overlay"
+            kustomize build --enable-helm "$overlay" | kubeconform -strict -summary
+          done

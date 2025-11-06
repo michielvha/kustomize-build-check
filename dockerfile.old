@@ -1,0 +1,43 @@
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+# Install git for go mod download
+RUN apk add --no-cache git
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux go build -o /kustomize-build-check ./cmd/action
+
+# Final stage
+FROM alpine:3.22
+
+# Install git (needed for GitHub Actions checkout context)
+RUN apk add --no-cache git ca-certificates curl
+
+# Install kustomize
+ARG KUSTOMIZE_VERSION=v5.3.0
+RUN wget -O /tmp/kustomize.tar.gz \
+    "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" && \
+    tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin && \
+    rm /tmp/kustomize.tar.gz && \
+    chmod +x /usr/local/bin/kustomize
+
+# Install helm (needed for --enable-helm flag)
+ARG HELM_VERSION=v3.16.2
+RUN wget -O /tmp/helm.tar.gz \
+    "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" && \
+    tar -xzf /tmp/helm.tar.gz -C /tmp && \
+    mv /tmp/linux-amd64/helm /usr/local/bin/helm && \
+    rm -rf /tmp/helm.tar.gz /tmp/linux-amd64 && \
+    chmod +x /usr/local/bin/helm
+
+COPY --from=builder /kustomize-build-check /usr/local/bin/kustomize-build-check
+
+ENTRYPOINT ["/usr/local/bin/kustomize-build-check"]

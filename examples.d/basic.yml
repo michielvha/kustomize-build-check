@@ -1,0 +1,26 @@
+name: Kustomize Build Check - Basic
+
+on:
+  pull_request:
+    paths:
+      - '**/*.yaml'
+      - '**/*.yml'
+    branches:
+      - main
+
+jobs:
+  validate:
+    name: Validate Kustomize Builds
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for git diff
+      
+      - name: Run Kustomize Build Check
+        uses: michielvha/kustomize-build-check@v1
+        with:
+          enable-helm: true
+          fail-on-error: true
