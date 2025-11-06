@@ -115,34 +115,34 @@ func (g *DependencyGraph) GetDependentOverlays(basePath string) []string {
 // This traverses up the dependency tree to find all consumers (direct and indirect)
 func (g *DependencyGraph) GetAllDependents(path string) []string {
 	path = filepath.Clean(path)
-	
+
 	visited := make(map[string]bool)
 	result := []string{}
-	
+
 	// Recursive helper function
 	var collectDependents func(currentPath string)
 	collectDependents = func(currentPath string) {
 		currentPath = filepath.Clean(currentPath)
-		
+
 		// Get direct dependents
 		if dependents, exists := g.reverseLookup[currentPath]; exists {
 			for _, dependent := range dependents {
 				dependent = filepath.Clean(dependent)
-				
+
 				// Avoid cycles
 				if visited[dependent] {
 					continue
 				}
-				
+
 				visited[dependent] = true
 				result = append(result, dependent)
-				
+
 				// Recursively get dependents of this dependent
 				collectDependents(dependent)
 			}
 		}
 	}
-	
+
 	collectDependents(path)
 	return result
 }
