@@ -3,7 +3,6 @@
 workflow: GitHubFlow/v1
 tag-prefix: '' # No prefix on tags (tags are like 0.0.1, not v0.0.1)
 semantic-version-format: Loose # Allow non-strict semver tags
-next-version: 0.0.1 # Fallback version if no tags exist
 # Custom version bump messages
 major-version-bump-message: '(BREAKING CHANGE|^.+!:)'
 minor-version-bump-message: '^feat(\([^)]+\))?:\s'
