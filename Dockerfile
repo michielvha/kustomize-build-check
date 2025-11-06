@@ -34,6 +34,10 @@ RUN wget -O /tmp/helm.tar.gz \
 RUN addgroup -g 1000 ${IMAGE_NAME} && \
     adduser -D -u 1000 -G ${IMAGE_NAME} ${IMAGE_NAME}
 
+# Configure git to trust any directory (safe for container use)
+# This must be done as root before switching to non-root user
+RUN git config --system --add safe.directory '*'
+
 # Copy the pre-built binary from GoReleaser's dist directory
 # GoReleaser creates binaries in dist/${IMAGE_NAME}_${TARGETOS}_${TARGETARCH}_v1/ for amd64
 # and dist/${IMAGE_NAME}_${TARGETOS}_${TARGETARCH}/ for arm64
