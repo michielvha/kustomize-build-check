@@ -4,15 +4,13 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/michielvha/kustomize-build-check)](https://goreportcard.com/report/github.com/michielvha/kustomize-build-check)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-CLI tool and GitHub Action for automatically discovering and validating Kustomize overlays with intelligent change detection.
-
-## 📦 For Users
+CLI tool for automatically discovering and validating Kustomize overlays with intelligent change detection.
 
 **Looking to use this in GitHub Actions?** → See the **[kustomize-build-check-action](https://github.com/michielvha/kustomize-build-check-action)** repository.
 
 This repository contains the source code and build pipeline. The action repository provides a clean interface for GitHub Actions users.
 
-## 📖 What It Does
+## Overview
 
 Intelligently validates Kustomize configurations by:
 - 🔍 Auto-discovering all Kustomize files and their dependencies
@@ -20,13 +18,13 @@ Intelligently validates Kustomize configurations by:
 - ⚡ Helm chart support with `--enable-helm`
 - 📊 Clear build results and error reporting
 
-## 🔧 Architecture
+## Architecture
 
 See [design.md](design.md) for detailed architecture documentation.
 
 **Repository Structure:**
 - **Tool Repository** (this one): Go source, binaries, Docker images
-- **Action Repository**: GitHub Action interface referencing GHCR images
+- **Action Repository**: GitHub Action interface referencing GHCR images generated via source code repository
 
 **Release Pipeline:**
 1. Push to `main` → GitVersion tags the repo
@@ -34,7 +32,7 @@ See [design.md](design.md) for detailed architecture documentation.
 3. Docker images built for linux/amd64 and linux/arm64
 4. Published to GitHub Releases + GHCR
 
-## 🛠️ Development
+## Development
 
 ### Prerequisites
 - Go 1.23+
@@ -79,12 +77,11 @@ export INPUT_ROOT-DIR="."
 │   ├── graph/           # Dependency graph
 │   └── reporter/        # Results output
 ├── .goreleaser.yml      # Multi-platform binary builds
-├── Dockerfile           # Development Docker image
-├── Dockerfile.release   # Production multi-arch image
+├── Dockerfile           # Production multi-arch image
 └── design.md            # Architecture documentation
 ```
 
-## 🚀 Release Process
+## Release Process
 
 Releases are automated via GitHub Actions using custom composite actions:
 
@@ -94,21 +91,7 @@ Releases are automated via GitHub Actions using custom composite actions:
 4. **Docker** → Builds and pushes multi-arch images to GHCR
 5. **Action Repo** → Update to reference new version (manual)
 
-### Creating a Release
-
-```bash
-# Commit with conventional commit format
-git commit -m "feat: add new feature"
-git push origin main
-
-# Pipeline automatically:
-# - Tags with GitVersion
-# - Builds binaries
-# - Publishes to GitHub Releases
-# - Pushes Docker images to GHCR
-```
-
-## 🤝 Contributing
+## Contributing
 
 Contributions welcome!
 
@@ -119,11 +102,11 @@ Contributions welcome!
 5. Use conventional commits (`feat:`, `fix:`, `chore:`)
 6. Submit a pull request
 
-## 📄 License
+## License
 
 MIT - See [LICENSE](LICENSE) for details
 
-## 🔗 Related Projects
+## Related Projects
 
 - [kustomize-build-check-action](https://github.com/michielvha/kustomize-build-check-action) - GitHub Action interface
 - [kustomize](https://github.com/kubernetes-sigs/kustomize) - Kubernetes native configuration management
