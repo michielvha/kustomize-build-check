@@ -1,0 +1,22 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gocritic
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+    - gci
+    - gofmt
+    # - golines
+
+# Reference: https://golangci-lint.run/usage/configuration/
