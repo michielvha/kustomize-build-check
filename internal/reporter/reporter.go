@@ -97,11 +97,15 @@ func (r *reporter) SetGitHubOutputs(results []builder.BuildResult) error {
 		return nil
 	}
 
-	f, err := os.OpenFile(outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open GITHUB_OUTPUT: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close GITHUB_OUTPUT: %w", closeErr)
+		}
+	}()
 
 	// Convert results to JSON
 	resultsJSON, err := json.Marshal(results)

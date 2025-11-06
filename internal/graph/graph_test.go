@@ -70,7 +70,9 @@ func TestGetDependentOverlays(t *testing.T) {
 	}
 
 	g := New()
-	g.Build(files)
+	if err := g.Build(files); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
 
 	overlays := g.GetDependentOverlays("/test/base")
 
@@ -108,7 +110,9 @@ func TestIsBase(t *testing.T) {
 	}
 
 	g := New()
-	g.Build(files)
+	if err := g.Build(files); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
 
 	if !g.IsBase("/test/base") {
 		t.Error("expected base to be identified as base")

@@ -45,7 +45,7 @@ components:
   - ../../components/monitoring
 `
 
-	if err := os.WriteFile(kustomizationPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(kustomizationPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
@@ -78,18 +78,30 @@ func TestFindAll(t *testing.T) {
 
 	// base/kustomization.yaml
 	baseDir := filepath.Join(tmpDir, "base")
-	os.MkdirAll(baseDir, 0755)
-	os.WriteFile(filepath.Join(baseDir, "kustomization.yaml"), []byte("resources:\n  - deployment.yaml\n"), 0644)
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("failed to create base dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, "kustomization.yaml"), []byte("resources:\n  - deployment.yaml\n"), 0o644); err != nil {
+		t.Fatalf("failed to write base kustomization: %v", err)
+	}
 
 	// overlays/dev/kustomization.yaml
 	devDir := filepath.Join(tmpDir, "overlays", "dev")
-	os.MkdirAll(devDir, 0755)
-	os.WriteFile(filepath.Join(devDir, "kustomization.yaml"), []byte("resources:\n  - ../../base\n"), 0644)
+	if err := os.MkdirAll(devDir, 0o755); err != nil {
+		t.Fatalf("failed to create dev dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(devDir, "kustomization.yaml"), []byte("resources:\n  - ../../base\n"), 0o644); err != nil {
+		t.Fatalf("failed to write dev kustomization: %v", err)
+	}
 
 	// overlays/prod/kustomization.yml (different extension)
 	prodDir := filepath.Join(tmpDir, "overlays", "prod")
-	os.MkdirAll(prodDir, 0755)
-	os.WriteFile(filepath.Join(prodDir, "kustomization.yml"), []byte("resources:\n  - ../../base\n"), 0644)
+	if err := os.MkdirAll(prodDir, 0o755); err != nil {
+		t.Fatalf("failed to create prod dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(prodDir, "kustomization.yml"), []byte("resources:\n  - ../../base\n"), 0o644); err != nil {
+		t.Fatalf("failed to write prod kustomization: %v", err)
+	}
 
 	d := New()
 	files, err := d.FindAll(tmpDir)

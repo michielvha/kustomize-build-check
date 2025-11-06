@@ -51,7 +51,7 @@ func (b *builder) Build(path string, enableHelm bool) BuildResult {
 
 	// Set timeout
 	timer := time.AfterFunc(b.timeout, func() {
-		cmd.Process.Kill()
+		_ = cmd.Process.Kill() // Ignore error, process might have already exited
 	})
 	defer timer.Stop()
 
