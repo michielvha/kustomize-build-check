@@ -44,8 +44,8 @@ func (b *builder) Build(path string, enableHelm bool) BuildResult {
 	}
 	args = append(args, path)
 
-	slog.Debug("Starting kustomize build", 
-		"path", path, 
+	slog.Debug("Starting kustomize build",
+		"path", path,
 		"enable_helm", enableHelm,
 		"args", args)
 
@@ -66,8 +66,8 @@ func (b *builder) Build(path string, enableHelm bool) BuildResult {
 	duration := time.Since(start)
 
 	if err != nil {
-		slog.Debug("Kustomize build failed", 
-			"path", path, 
+		slog.Debug("Kustomize build failed",
+			"path", path,
 			"duration", duration,
 			"error", err)
 		return BuildResult{
@@ -79,10 +79,10 @@ func (b *builder) Build(path string, enableHelm bool) BuildResult {
 		}
 	}
 
-	slog.Debug("Kustomize build succeeded", 
-		"path", path, 
+	slog.Debug("Kustomize build succeeded",
+		"path", path,
 		"duration", duration)
-	
+
 	return BuildResult{
 		Path:     path,
 		Success:  true,
