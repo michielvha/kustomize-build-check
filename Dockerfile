@@ -1,4 +1,4 @@
-FROM alpine:3.22
+FROM alpine:3.23
 
 # Build-time variables
 # IMAGE_NAME is passed from docker-release-action (the 'project' parameter)
