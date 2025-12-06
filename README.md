@@ -130,10 +130,6 @@ Contributions welcome!
 5. Use conventional commits (`feat:`, `fix:`, `chore:`)
 6. Submit a pull request
 
-## License
-
-MIT - See [LICENSE](LICENSE) for details
-
 ## Related Projects
 
 - [kustomize-build-check-action](https://github.com/michielvha/kustomize-build-check-action) - GitHub Action interface
