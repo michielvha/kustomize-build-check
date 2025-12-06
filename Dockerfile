@@ -11,7 +11,7 @@ ARG TARGETOS
 ENV IMAGE_NAME=${IMAGE_NAME}
 
 # Install runtime dependencies
-RUN apk add --no-cache git ca-certificates wget
+RUN apk update && apk add --no-cache git ca-certificates wget
 
 # Install kustomize
 ARG KUSTOMIZE_VERSION=v5.3.0
