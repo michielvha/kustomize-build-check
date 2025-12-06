@@ -11,7 +11,10 @@ ARG TARGETOS
 ENV IMAGE_NAME=${IMAGE_NAME}
 
 # Install runtime dependencies
-RUN apk update && apk add --no-cache git ca-certificates wget
+# Use --no-scripts to avoid trigger errors with QEMU emulation on ARM64 (Alpine 3.23 issue)
+RUN apk update && \
+    apk add --no-cache --no-scripts git ca-certificates wget && \
+    update-ca-certificates 2>/dev/null || true
 
 # Install kustomize
 ARG KUSTOMIZE_VERSION=v5.3.0
