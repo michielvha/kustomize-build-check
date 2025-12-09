@@ -62,6 +62,15 @@ func main() {
 
 	if len(affectedPaths) == 0 {
 		fmt.Println("   No kustomizations affected by changes")
+		// Even if no paths affected, we should report 0 builds
+		rep := reporter.New()
+		if err := rep.WriteGitHubStepSummary(nil); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to write GitHub step summary: %v\n", err)
+		}
+		if err := rep.SetGitHubOutputs(nil); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to set GitHub outputs: %v\n", err)
+		}
+
 		fmt.Println("\n✅ All checks passed")
 		os.Exit(0)
 	}
@@ -83,6 +92,11 @@ func main() {
 	// Set GitHub Actions outputs
 	if err := rep.SetGitHubOutputs(results); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to set GitHub outputs: %v\n", err)
+	}
+
+	// Write GitHub Step Summary
+	if err := rep.WriteGitHubStepSummary(results); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to write GitHub step summary: %v\n", err)
 	}
 
 	// Determine exit code

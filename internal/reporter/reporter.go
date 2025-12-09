@@ -22,6 +22,7 @@ type Reporter interface {
 	GenerateSummary(results []builder.BuildResult) Summary
 	PrintResults(results []builder.BuildResult)
 	SetGitHubOutputs(results []builder.BuildResult) error
+	WriteGitHubStepSummary(results []builder.BuildResult) error
 }
 
 type reporter struct{}
@@ -124,6 +125,68 @@ func (r *reporter) SetGitHubOutputs(results []builder.BuildResult) error {
 		if _, err := f.WriteString(output + "\n"); err != nil {
 			return fmt.Errorf("failed to write output: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// WriteGitHubStepSummary writes a Markdown summary to GITHUB_STEP_SUMMARY
+func (r *reporter) WriteGitHubStepSummary(results []builder.BuildResult) error {
+	summaryFile := os.Getenv("GITHUB_STEP_SUMMARY")
+	if summaryFile == "" {
+		return nil
+	}
+
+	f, err := os.OpenFile(summaryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open GITHUB_STEP_SUMMARY: %w", err)
+	}
+	defer f.Close()
+
+	summary := r.GenerateSummary(results)
+
+	var sb strings.Builder
+	sb.WriteString("## Kustomize Build Check Results\n\n")
+	sb.WriteString("| Metric | Count |\n")
+	sb.WriteString("|--------|-------|\n")
+	sb.WriteString(fmt.Sprintf("| Total Builds | %d |\n", summary.Total))
+	sb.WriteString(fmt.Sprintf("| ✅ Passed | %d |\n", summary.Success))
+	sb.WriteString(fmt.Sprintf("| ❌ Failed | %d |\n", summary.Failed))
+	sb.WriteString("\n")
+
+	if summary.Failed > 0 {
+		sb.WriteString("### ❌ Build Errors\n\n")
+		for _, result := range results {
+			if !result.Success {
+				sb.WriteString(fmt.Sprintf("- **%s**\n", result.Path))
+				sb.WriteString("```\n")
+				// Limit error output to avoid blowing up the summary
+				errorLines := strings.Split(result.Error, "\n")
+				if len(errorLines) > 10 {
+					sb.WriteString(strings.Join(errorLines[:10], "\n"))
+					sb.WriteString(fmt.Sprintf("\n... (+%d more lines)", len(errorLines)-10))
+				} else {
+					sb.WriteString(result.Error)
+				}
+				sb.WriteString("\n```\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	if summary.Success > 0 {
+		sb.WriteString("### ✅ Successful Builds\n\n")
+		sb.WriteString("<details>\n<summary>Click to see passed builds</summary>\n\n")
+		for _, result := range results {
+			if result.Success {
+				sb.WriteString(fmt.Sprintf("- %s (%.2fs)\n", result.Path, result.Duration.Seconds()))
+			}
+		}
+		sb.WriteString("\n</details>\n")
+	}
+
+	if _, err := f.WriteString(sb.String()); err != nil {
+		return fmt.Errorf("failed to write summary: %w", err)
 	}
 
 	return nil
