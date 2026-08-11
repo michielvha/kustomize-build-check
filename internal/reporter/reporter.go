@@ -11,9 +11,12 @@ import (
 
 // Summary contains aggregated build results
 type Summary struct {
-	Total   int
+	Total int
+	// Success and Failed count only builds that actually ran. Skipped paths are
+	// excluded from both, so Total == Success + Failed + Skipped.
 	Success int
 	Failed  int
+	Skipped int
 	Results []builder.BuildResult
 }
 
@@ -40,9 +43,12 @@ func (r *reporter) GenerateSummary(results []builder.BuildResult) Summary {
 	}
 
 	for _, result := range results {
-		if result.Success {
+		switch {
+		case result.Skipped:
+			summary.Skipped++
+		case result.Success:
 			summary.Success++
-		} else {
+		default:
 			summary.Failed++
 		}
 	}
@@ -61,9 +67,12 @@ func (r *reporter) PrintResults(results []builder.BuildResult) {
 	fmt.Println(strings.Repeat("=", 80))
 
 	for _, result := range results {
-		if result.Success {
+		switch {
+		case result.Skipped:
+			fmt.Printf("⏭️  %s - Skipped (%s)\n", result.Path, result.SkipReason)
+		case result.Success:
 			fmt.Printf("✅ %s - Build successful (%.2fs)\n", result.Path, result.Duration.Seconds())
-		} else {
+		default:
 			fmt.Printf("❌ %s - Build failed (%.2fs)\n", result.Path, result.Duration.Seconds())
 			if result.Error != "" {
 				// Print first few lines of error
@@ -83,8 +92,8 @@ func (r *reporter) PrintResults(results []builder.BuildResult) {
 
 	summary := r.GenerateSummary(results)
 	fmt.Println(strings.Repeat("=", 80))
-	fmt.Printf("\nSummary: %d total, %d successful, %d failed\n",
-		summary.Total, summary.Success, summary.Failed)
+	fmt.Printf("\nSummary: %d total, %d successful, %d failed, %d skipped\n",
+		summary.Total, summary.Success, summary.Failed, summary.Skipped)
 }
 
 // SetGitHubOutputs sets GitHub Actions output variables
@@ -118,6 +127,7 @@ func (r *reporter) SetGitHubOutputs(results []builder.BuildResult) error {
 	outputs := []string{
 		fmt.Sprintf("failed-count=%d", summary.Failed),
 		fmt.Sprintf("success-count=%d", summary.Success),
+		fmt.Sprintf("skipped-count=%d", summary.Skipped),
 		fmt.Sprintf("results=%s", resultsJSON),
 	}
 
@@ -152,12 +162,13 @@ func (r *reporter) WriteGitHubStepSummary(results []builder.BuildResult) error {
 	sb.WriteString(fmt.Sprintf("| Total Builds | %d |\n", summary.Total))
 	sb.WriteString(fmt.Sprintf("| ✅ Passed | %d |\n", summary.Success))
 	sb.WriteString(fmt.Sprintf("| ❌ Failed | %d |\n", summary.Failed))
+	sb.WriteString(fmt.Sprintf("| ⏭️ Skipped | %d |\n", summary.Skipped))
 	sb.WriteString("\n")
 
 	if summary.Failed > 0 {
 		sb.WriteString("### ❌ Build Errors\n\n")
 		for _, result := range results {
-			if !result.Success {
+			if !result.Success && !result.Skipped {
 				sb.WriteString(fmt.Sprintf("- **%s**\n", result.Path))
 				sb.WriteString("```\n")
 				// Limit error output to avoid blowing up the summary
@@ -169,6 +180,17 @@ func (r *reporter) WriteGitHubStepSummary(results []builder.BuildResult) error {
 					sb.WriteString(result.Error)
 				}
 				sb.WriteString("\n```\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	if summary.Skipped > 0 {
+		sb.WriteString("### ⏭️ Skipped\n\n")
+		sb.WriteString("These paths no longer exist in the working tree and were not built.\n\n")
+		for _, result := range results {
+			if result.Skipped {
+				sb.WriteString(fmt.Sprintf("- %s (%s)\n", result.Path, result.SkipReason))
 			}
 		}
 		sb.WriteString("\n")

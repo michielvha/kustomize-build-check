@@ -28,6 +28,16 @@ func (a *analyzer) GetChangedFiles(baseRef, headRef string) ([]string, error) {
 		headRef = "HEAD"
 	}
 
+	// Deletions are intentionally NOT filtered out here (e.g. with
+	// --diff-filter=d). Deleting a file that a surviving kustomization still
+	// references is a real breakage, and it is only detected because the deleted
+	// path reaches the impact analyzer and marks the consuming kustomization as
+	// affected. Filtering deletions at this layer would turn that into a silent
+	// pass. Paths that no longer exist are dropped later, at the build step,
+	// where the existence of the build target can be checked directly.
+	//
+	// Rename detection (git's default) already reports only the new path for a
+	// renamed file, so renames validate the new location without the old one.
 	cmd := exec.Command("git", "diff", "--name-only", baseRef, headRef)
 
 	var stdout, stderr bytes.Buffer
