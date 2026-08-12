@@ -312,8 +312,13 @@ added by this plan.
       `SkipReason` and `Failed == 0` for that path (F-C4, F-E3).
 - [ ] AC-C6: An unparseable kustomization still produces a graph **node** at its directory, so a
       kustomization that references it keeps its edge and its dependents still propagate (F-C2a).
-- [ ] AC-C7: `SetGitHubOutputs` emits exactly the same four keys with the same shapes as before
-      the phase; the `results` JSON schema is unchanged (no fourth result class).
+- [ ] AC-C7: **this phase** adds no key to `SetGitHubOutputs` and changes the shape of none of the
+      four existing keys (`failed-count`, `success-count`, `skipped-count`, `results`); the
+      `results` JSON schema is unchanged (no fourth result class).
+      *Worded as "adds none" rather than "emits exactly four", because `shallow-clone-support`
+      lands a fifth key (`change-detection-mode`) immediately after this plan. A literal
+      four-key assertion would pass here and then start failing for a reason unrelated to this
+      plan. The invariant that matters is additivity, not the count.*
 
 **Phase 4 — complete reference surfaces (Group D, closes G2)**
 
@@ -594,7 +599,7 @@ greppable:
 | AC-C4: `patches` as plain strings → field error, file retained | Unit | `internal/discovery/discovery_test.go` — `TestUndecodableFieldDoesNotDropFile` |
 | AC-C5: removed directory still `Skipped`, not `Failed` | **E2E** | `internal/integration/pipeline_test.go` — existing `TestDeletedDirectoryIsSkipped` |
 | AC-C6: unparseable file still produces a graph node | **E2E** | `internal/integration/pipeline_test.go` — `TestUnparseableKustomizationKeepsItsGraphNode` |
-| AC-C7: action outputs contract unchanged | Unit | `internal/reporter/reporter_test.go` — existing `SetGitHubOutputs` coverage, asserted key-for-key |
+| AC-C7: this phase adds no output key and changes no existing key's shape | Unit | `internal/reporter/reporter_test.go` — existing `SetGitHubOutputs` coverage. Assert the four keys are **present with unchanged shapes**, not that they are the only keys, so `shallow-clone-support`'s fifth key does not later fail this row |
 | AC-D1: `patches[].path` | **E2E** | `internal/integration/pipeline_test.go` — `TestPatchesPathMarksAffected` |
 | AC-D2: inline `patch:` tolerated, contributes nothing | **E2E** + Unit | `internal/integration/pipeline_test.go` — `TestPatchesInlineIsTolerated`; `internal/discovery/discovery_test.go` |
 | AC-D3: `configMapGenerator[].files` | **E2E** | `internal/integration/pipeline_test.go` — `TestConfigMapGeneratorFilesMarksAffected` |
@@ -624,6 +629,18 @@ greppable:
 | 2 | Group B — delete the `filepath.Ext` classifier per ADR-001, update the count assertion, add the edge assertion | **S** (~0.5 day) | None (sequenced after 1 for a clean revert) |
 | 3 | Group C — two-stage tolerant decode, retain unparseable files, always-affected rule, reporter surface, harness extension | **M** (~1.5 days) | Phase 1 |
 | 4 | Group D — reference model, eight P0/P1 surfaces, three P2 surfaces, alias trap, ~14 E2E scenarios | **L** (~3 days) | Phase 3 (composes with Phase 1) |
+| 5 | **Release and bump the consumer pin** — merge, let the release workflow publish, then update the wrapper's image SHA | **S** (~15 min) | Phase 4 (or whichever phase ships last) |
+
+**Phase 5 is not optional, and it is easy to forget.** Every phase above changes Go code, so
+merging to `main` triggers `build-release.yml`, GitVersion tags a new version and a new image is
+pushed to GHCR tagged with the merge commit SHA. **Until
+[`kustomize-build-check-action/action.yml`](https://github.com/michielvha/kustomize-build-check-action/blob/main/action.yml)
+has its `image:` pin bumped to that SHA, no consumer sees any of this work** — the wrapper pins by
+digest, so `@main` keeps serving the old image. This exact step was needed manually after PR #8.
+
+Verify the new tag exists in GHCR *before* bumping the pin, rather than assuming the workflow
+succeeded. If several plans land close together, bump the pin **once** after the last one, which is
+what `shallow-clone-support`, `build-timeout-handling` and `container-hardening` also assume.
 
 **Ordering confirmed, with one qualification.** The spec's A → B → C → D order is right and is
 adopted:

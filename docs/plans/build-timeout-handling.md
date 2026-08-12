@@ -354,11 +354,20 @@ keys the moment they ship.
   `WriteGitHubStepSummary` to carry run info (its F-24, an **interface change** at
   `reporter.go:24-29`); this plan edits the classification switch (`:46-53`), the console switch
   (`:70-90`), the metric table (`:159-166`) and the Build Errors filter (`:171`). These are
-  different regions of the same file, so expect textual conflicts, not semantic ones — with one
-  exception: **plan 2 changes the signatures of the two methods this plan edits the bodies of.**
-  Land plan 2 first, then write Phase 2 against the new signatures. Phase 2 adds no parameter of
-  its own; the timeout data travels on the results (F-05), which is precisely why `TimeoutLimit`
-  is on `BuildResult` rather than held by the reporter.
+  different regions of the same file, so expect textual conflicts, not semantic ones.
+
+  **CORRECTED after plan 2 was written.** This plan was authored while `shallow-clone-support` was
+  still in flight and assumed it would *widen the signatures* of the two methods whose bodies this
+  plan edits. It does not. [ADR-011](../decisions/ADR-011-run-metadata-into-the-reporter.md) chose
+  **constructor injection** (`reporter.New(RunInfo)`) precisely so all four method signatures stay
+  byte-identical. So there is no signature to write against, and the earlier instruction to "land
+  plan 2 first, then write Phase 2 against the new signatures" is void.
+
+  The real residual contact is different and smaller: plan 2 changes the **`reporter.New()`
+  constructor**, which this plan calls but does not modify. Landing order still favours plan 2
+  first, purely to avoid rebasing the constructor call sites. Phase 2 adds no parameter of its
+  own; the timeout data travels on the results (F-05), which is precisely why `TimeoutLimit` is on
+  `BuildResult` rather than held by the reporter.
 - **`internal/integration/pipeline_test.go` is touched by plans 1, 2 and 3.** Plan 1 extends the
   `run()` harness (`:113-140`) to point `GITHUB_STEP_SUMMARY` at a temp file and return its
   contents. **Phase 2 of this plan depends on that extension** for AC-4. If plan 1 has landed,
