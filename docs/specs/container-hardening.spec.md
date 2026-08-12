@@ -299,10 +299,27 @@ a degraded `git` would silently change the counts rather than crash
 
 ### 10. Open Questions
 
+**Resolved by the repo owner (2026-08-12):**
+
+- **OQ-1 → pin by digest.** *"sha is fine its more secure anyway."* The base is pinned as
+  `cgr.dev/chainguard/wolfi-base@sha256:…`, which was verified this session to work anonymously
+  on the free tier, including for historical digests. Digest pinning is adopted as the deliberate
+  choice rather than a workaround for the entitlement limit: it is reproducible and immune to a
+  tag being moved under us. No Chainguard entitlement is purchased. Fallback (3) — mirroring the
+  base into GHCR under this account — remains the answer if `cgr.dev` availability ever becomes a
+  build-time problem, since a digest is mirrorable byte-for-byte. **F-06's digest-bump mechanism
+  therefore becomes load-bearing** (OQ-3): a pinned digest that is never bumped silently
+  re-accumulates the very CVEs this spec exists to remove.
+- **OQ-2 → keep helm bundled (option (a)).** *"yes bundle helm."* No user-facing change, and the
+  wrapper's default `enable-helm: 'true'` keeps working. Parity stays well-defined: F-09 and AC-2
+  are unchanged and the README needs no warning. The CVE cost of helm is accepted; the required
+  before/after scan (F-26) will quantify it, and dropping or splitting it stays available later as
+  a non-urgent follow-up rather than a decision blocking this spec.
+
+**Still open:**
+
 | ID | Question | Owner | Needed by |
 |---|---|---|---|
-| **OQ-1** | **Chainguard entitlement and registry dependency.** Free-tier Chainguard images publish only `latest` / `latest-dev`; "Production Containers, which add version-specific tags and patch SLAs, require authenticating to the registry" (<https://edu.chainguard.dev/chainguard/containers/quickstart.md>). Verified 2026-08-12 that `cgr.dev/chainguard/wolfi-base` **is** anonymously pullable and that historical digests still resolve, so pin-by-digest works on the free tier today. What cannot be verified from here: (a) whether the retention of old digests is a *policy* or an observation — Chainguard offers no registry uptime SLA (<https://edu.chainguard.dev/chainguard/containers/chainguard-registry/overview.md>); (b) whether this repo wants a build-time dependency on `cgr.dev` at all; (c) whether a Starter/Production entitlement is wanted for versioned tags. **Fallbacks, in order:** (1) `cgr.dev/chainguard/wolfi-base@sha256:…` + a digest-bump bot (F-06); (2) `cgr.dev/chainguard/git@sha256:…` — verified 2026-08-12 as anonymously pullable, amd64+arm64, shipping `git 2.55.0-r4` and `git-lfs 3.7.1-r18` with **no `apk` and no package manager**, `USER 65532`, `ENTRYPOINT /usr/bin/git`; this removes the emulated `apk` step entirely and is the strictly harder-hardened option, at the cost of overriding `USER` to 1001 numerically and writing `/etc/gitconfig` from a builder stage; (3) mirror the chosen base into GHCR under this account and pin that; (4) if Chainguard is ruled out entirely, fall back to a `wolfi-base`-derived image built with `apko` from `packages.wolfi.dev` directly, which needs no Chainguard account at all. **Decide before the plan picks a `FROM`.** | Michiel | Before `/plan` |
-| **OQ-2** | **Should `helm` stay in the image?** It is needed only for `--enable-helm` (`Dockerfile:27`, `build-execution.spec.md` F-13), is invoked by kustomize rather than by this tool, and is the largest single component. Options: **(a) keep it** — zero user-facing change, largest CVE surface; **(b) drop it and document** — `--enable-helm` builds then fail with kustomize's own error (`builder.go:103`), which is a *breaking change* for anyone using the default `enable-helm: 'true'` (`action.yml:15-18` in both repos); **(c) publish two variants** (`:latest` and `:latest-helm`), which doubles the release matrix and the pin surface. This changes the user-facing product, so it is not the spec author's call. If unresolved, **default to (a)** and re-open it after the scan (F-26) shows how much of the CVE count helm actually owns. | Michiel | Before `/plan`; blocks F-09 |
 | **OQ-3** | Should the digest-bump mechanism (F-06) be `digestabot`, Dependabot, or a documented manual cadence? Low stakes, but an unbumped pin silently re-accumulates CVEs. | Michiel | Before merge |
 | **OQ-4** | The exact Docker invocation the Actions runner uses for a `runs: using: docker` action (working directory, mount paths, user) is `[unverified - verify before relying]` in this session. It is load-bearing only for how faithfully the AC-4 smoke test mirrors production. The plan should verify it against the current GitHub Actions docs, or make the smoke test set `-v`, `-w` and `-u` explicitly and not depend on defaults. | Planner | Before AC-4 is written |
 
@@ -319,9 +336,9 @@ a degraded `git` would silently change the counts rather than crash
   (`wolfi-base:latest` → `sha256:30f03343947c7ae3581fda727a6e2aa7b8ce7009b7bfc2ab8d5c9483ace5812f`,
   2026-08-12) is illustrative only, and the plan will re-resolve `latest` at implementation time.
   **[Risk: low]**
-- Assumed `helm` stays bundled (OQ-2 default (a)) so this spec's parity requirements are
-  well-defined. **[Risk: medium — if Michiel picks (b), F-09, AC-2 and the README all change, and
-  it is a breaking change for the wrapper's default `enable-helm: 'true'`]**
+- ~~Assumed~~ **Confirmed** that `helm` stays bundled (OQ-2, option (a)), so this spec's parity
+  requirements are well-defined and the wrapper's default `enable-helm: 'true'` keeps working.
+  **[Risk: none — this is now a decision, not an assumption]**
 - Assumed the binary may be installed at a **name-agnostic** path (F-16) to satisfy both "no
   shell in the entrypoint" and "nothing hardcodes the image name" (`CLAUDE.md`). Verified nothing
   reads `argv[0]` or the binary filename. **[Risk: low]**

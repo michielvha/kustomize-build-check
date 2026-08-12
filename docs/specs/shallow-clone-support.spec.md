@@ -376,12 +376,30 @@ Existing outputs unchanged in name and meaning: `results`, `failed-count`, `succ
 
 ### 10. Open Questions
 
-**OQ-1 — ESCALATED: should the action fetch the missing history itself, and with what
-credential?** *Owner: repo owner. Blocking only for Option 2; this spec ships without it.*
+**OQ-1 — RESOLVED: NO. The action will not fetch missing history, and no credential is
+introduced.** *Decided by the repo owner. Recorded as a rejected alternative; nothing is blocked.*
 
-Deepening from inside the container (brief Option 2) is the only option that makes the action
-work *as-is* on `fetch-depth: 1` while keeping the fast diff path. It was **not** self-resolved,
-because it is security-sensitive and changes the public contract. What would have to be decided:
+The question put back was "why are we doing this?", and on examination the honest answer is that
+we should not. **Deepening buys speed, not correctness.** The `validate-all` fallback (F-08)
+already guarantees the thing that matters — no false pass — because the discovered set is a strict
+superset of any diff-derived set. Deepening would only avoid the cost of that fallback in a
+situation that is itself a misconfiguration, and one the user fixes with a single line
+(`fetch-depth: 0`) that this spec makes the tool say out loud (F-18).
+
+Against that thin benefit it would cost:
+
+- a **new public input** carrying a secret into a container action, for every consumer;
+- **outbound network egress** from a container that today makes none at runtime, changing its
+  security posture for self-hosted and egress-restricted runners;
+- and it would **degrade back to the fallback exactly on fork PRs**, where a check matters most.
+
+So it adds credential handling and contract surface to optimise the one case where it is least
+likely to work. Rejected. F-14 keeps `on-unresolvable-base` as an **enum** rather than a boolean,
+so a `deepen` value remains addable later without a second input if this is ever revisited.
+
+The analysis below is retained as the record of what would have had to be decided.
+
+<details><summary>What would have needed answering, retained for the record</summary>
 
 - **Which credential.** There is **no `token` input** in either `action.yml` today (this repo
   `action.yml:9-33`; wrapper `action.yml:9-28`). Adding one is a public-contract change and makes
@@ -406,9 +424,11 @@ because it is security-sensitive and changes the public contract. What would hav
 - **Network egress.** The action currently makes no outbound connection at runtime; adding one
   changes its security posture, including for self-hosted or egress-restricted runners.
 
-If OQ-1 is later answered yes, it lands as a third value of the existing enum
+If this is ever revisited, it lands as a third value of the existing enum
 (`on-unresolvable-base: deepen`) that tries to fetch and, on any failure, falls through to
 `validate-all` — which is why F-14 specifies an enum rather than a boolean.
+
+</details>
 
 **OQ-2 — should the binary implement the auto-detected PR base it already advertises?** *Owner:
 repo owner.* Both `action.yml` files promise auto-detection (`action.yml:11`; wrapper
@@ -448,11 +468,24 @@ documentation, and drop the annotation rather than guess if it cannot be confirm
 
 **Assumptions** (mode = autonomous; the developer audits these at the merge gate):
 
-- **A-01 — `validate-all` is the default, `fail` the opt-out.** Derived from CLAUDE.md's asymmetry
-  plus the observation that full-scan is a strict superset (NF-01) and needs no network. The cost
-  is wall-clock on large repos (NF-03), which is visible and bounded, versus a hard failure, which
-  is not recoverable by the tool. [Risk: medium — it changes an exit code from 1 to 0 for an
-  existing failure mode, which a consumer could conceivably be relying on.]
+- **A-01 — `validate-all` is the default, `fail` the opt-out. CONFIRMED by the repo owner.**
+  Derived from CLAUDE.md's asymmetry plus the observation that full-scan is a strict superset
+  (NF-01) and needs no network. The cost is wall-clock on large repos (NF-03), which is visible
+  and bounded, versus a hard failure, which is not recoverable by the tool.
+
+  The "exit 1 → 0" framing overstates the risk, and the reasoning is worth stating plainly because
+  the owner was rightly unsure. Today this scenario is **not a considered failure**: it is the tool
+  crashing on a raw `fatal: bad object` before validating anything at all. Nobody can be depending
+  on that as a signal, because it carries no information about the manifests — it fires identically
+  whether the repo is perfect or completely broken. After this change the exit code reflects
+  something real: every discovered kustomization was built, and the run is green only if they all
+  passed. A repo that is genuinely broken still exits 1, and now for the right reason.
+
+  So this is not "a failing case now passes". It is "a crashing case now does the correct, more
+  thorough thing". The guards that keep it honest are F-17/F-18 (say why, in the report and the
+  step summary, not only on stderr), the `change-detection-mode=full-scan` output (F-21/F-22) so
+  it is machine-visible, and `on-unresolvable-base: fail` for anyone who wants the old hard stop.
+  [Risk: low, once the diagnostic is loud. The real residual cost is wall-clock, not correctness.]
 - **A-02 — `unresolvable-not-shallow` (a typo'd or deleted ref) also degrades rather than fails.**
   Uniform handling of "the changed set is unknown", with a distinct message (F-18) so the wrong
   remedy is never suggested. The alternative — fail on bad ref, degrade on shallow — is defensible
