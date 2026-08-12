@@ -17,6 +17,7 @@ Intelligently validates Kustomize configurations by:
 - 🧠 Smart testing based on what changed (bases → all overlays, overlays → just that one)
 - ⚡ Helm chart support with `--enable-helm`
 - 📊 Clear build results and error reporting
+- ⏭️ Skipping paths the change removed, so deleting or renaming a directory does not fail the check
 
 ## Architecture
 
@@ -46,6 +47,8 @@ See [design.md](design.md) for detailed architecture documentation.
 go build -o kustomize-build-check ./cmd/action
 
 # Run tests
+# The integration tests build real repositories, so they need git and the
+# kustomize CLI on PATH. They skip themselves if kustomize is missing.
 go test ./...
 
 # Build Docker image locally

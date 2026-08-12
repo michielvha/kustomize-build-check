@@ -99,14 +99,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Warning: failed to write GitHub step summary: %v\n", err)
 	}
 
-	// Determine exit code
+	// Determine exit code. Skipped paths are not failures: they are directories
+	// the change removed, so there is nothing left to validate.
 	summary := rep.GenerateSummary(results)
 	if failOnError && summary.Failed > 0 {
 		fmt.Println("\n❌ Some builds failed")
 		os.Exit(1)
 	}
 
-	fmt.Println("\n✅ All builds successful")
+	if summary.Skipped > 0 {
+		fmt.Printf("\n✅ All builds successful (%d skipped)\n", summary.Skipped)
+	} else {
+		fmt.Println("\n✅ All builds successful")
+	}
 	os.Exit(0)
 }
 

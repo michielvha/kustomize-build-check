@@ -42,6 +42,9 @@ outputs:
   success-count:
     description: 'Number of successful builds'
 
+  skipped-count:
+    description: 'Number of paths skipped because they no longer exist (deleted or renamed by the change)'
+
 runs:
   using: 'docker'
   image: 'Dockerfile'

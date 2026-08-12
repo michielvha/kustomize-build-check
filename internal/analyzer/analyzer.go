@@ -38,15 +38,18 @@ func (a *analyzer) GetAffectedKustomizations(
 	for _, changedFile := range changedFiles {
 		slog.Debug("Processing changed file", "file", changedFile)
 
+		// git reports paths relative to the repository root, while discovery
+		// records absolute directories. Normalize once, up front, so both
+		// branches below compare like with like.
+		absFile, err := filepath.Abs(changedFile)
+		if err != nil {
+			// Fall back to the relative path if abs fails
+			absFile = filepath.Clean(changedFile)
+		}
+
 		// Check if the changed file is a kustomization file itself
 		if isKustomizationFile(filepath.Base(changedFile)) {
-			dir := filepath.Dir(changedFile)
-			// Convert to absolute path to match graph nodes
-			absDir, err := filepath.Abs(dir)
-			if err != nil {
-				// Fall back to relative if abs fails
-				absDir = dir
-			}
+			absDir := filepath.Dir(absFile)
 			slog.Debug("Changed file is kustomization file",
 				"file", changedFile,
 				"dir", absDir)
@@ -56,7 +59,7 @@ func (a *analyzer) GetAffectedKustomizations(
 
 		// Check if the changed file is referenced by any kustomization
 		for _, kust := range allKustomizations {
-			if a.fileReferencedByKustomization(changedFile, kust) {
+			if a.fileReferencedByKustomization(absFile, kust) {
 				slog.Debug("Changed file referenced by kustomization",
 					"file", changedFile,
 					"kustomization", kust.Dir)
@@ -103,13 +106,16 @@ func (a *analyzer) addAffected(dir string, g graph.Graph, affected map[string]bo
 	}
 }
 
-// fileReferencedByKustomization checks if a file is referenced by a kustomization
+// fileReferencedByKustomization checks if a file is referenced by a kustomization.
+// changedFile must be an absolute path, to match the absolute Dir recorded by discovery.
 func (a *analyzer) fileReferencedByKustomization(changedFile string, kust discovery.KustomizeFile) bool {
 	changedFile = filepath.Clean(changedFile)
 	kustDir := filepath.Clean(kust.Dir)
 
-	// Check if the changed file is in the same directory or subdirectory
-	if !strings.HasPrefix(changedFile, kustDir) {
+	// Check if the changed file is in the same directory or subdirectory.
+	// The separator matters: without it "/repo/base-old/x.yaml" would be treated
+	// as living under "/repo/base".
+	if !strings.HasPrefix(changedFile, kustDir+string(filepath.Separator)) {
 		return false
 	}
 

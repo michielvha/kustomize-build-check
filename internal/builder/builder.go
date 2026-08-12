@@ -2,19 +2,30 @@ package builder
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
 	"os/exec"
 	"time"
 )
 
 // BuildResult represents the result of a kustomize build
 type BuildResult struct {
-	Path     string
-	Success  bool
-	Output   string
-	Error    string
-	Duration time.Duration
+	Path string
+	// Success is true only for a build that ran and exited 0. A skipped result
+	// is neither a success nor a failure, so check Skipped before treating
+	// !Success as a build error.
+	Success bool
+	// Skipped marks a path that was never handed to kustomize because the change
+	// removed it. Skipped results are excluded from both the success and the
+	// failure counts. See skipReason for exactly what qualifies.
+	Skipped    bool
+	SkipReason string
+	Output     string
+	Error      string
+	Duration   time.Duration
 }
 
 // Builder executes kustomize builds
@@ -37,6 +48,21 @@ func New() Builder {
 // Build executes a single kustomize build
 func (b *builder) Build(path string, enableHelm bool) BuildResult {
 	start := time.Now()
+
+	// A path the change removed is not a build target. Deleting or renaming a
+	// kustomize directory leaves its old path in the diff, so it still reaches
+	// this point as a candidate; building it would report a bogus failure for a
+	// directory the change legitimately removed.
+	if reason := skipReason(path); reason != "" {
+		slog.Debug("Skipping build", "path", path, "reason", reason)
+		return BuildResult{
+			Path:       path,
+			Success:    false,
+			Skipped:    true,
+			SkipReason: reason,
+			Duration:   time.Since(start),
+		}
+	}
 
 	args := []string{"build"}
 	if enableHelm {
@@ -90,6 +116,30 @@ func (b *builder) Build(path string, enableHelm bool) BuildResult {
 		Error:    "",
 		Duration: duration,
 	}
+}
+
+// skipReason reports why path is not a build target, or "" if it should be
+// handed to kustomize.
+//
+// The check is deliberately narrow. A directory that still holds content but
+// has lost its kustomization file is a genuine error and must stay a failure,
+// so only paths the change actually removed are skipped.
+func skipReason(path string) string {
+	entries, err := os.ReadDir(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "removed in this change"
+	case err != nil:
+		// Not a directory, or unreadable. Let kustomize report the problem.
+		return ""
+	case len(entries) == 0:
+		// git cannot represent an empty directory, so there is nothing here in
+		// the commit under test: a fresh checkout would not have this path at
+		// all. It only survives in reused workspaces, where moving the last
+		// file out of a directory leaves the empty directory behind.
+		return "removed in this change (empty directory)"
+	}
+	return ""
 }
 
 // BuildAll executes builds for all paths
