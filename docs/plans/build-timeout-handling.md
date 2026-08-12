@@ -695,8 +695,13 @@ there is a test that fails if the binary ever stops reading the input.
       `parseBuildTimeout`: a valid value, a malformed value, `0`, a negative, a unitless `120`, and
       the empty-string default path (F-37, AC-9).
 - [ ] Add the E2E wiring scenario `TestBuildTimeoutInputIsReadByTheBinary` in
-      `internal/integration/pipeline_test.go` (AC-15, AC-8, AC-2, AC-9). It `go build`s the real
-      binary into `t.TempDir()` and runs it against a fixture repo:
+      `internal/integration/pipeline_test.go` (AC-15, AC-8, AC-2, AC-9). **Reuse
+      [ADR-010](../decisions/ADR-010-e2e-through-the-real-binary.md)'s harness — do not build a
+      second one.** `shallow-clone-support` lands `TestMain`-built `actionBin` plus
+      `(*repo).runBinary(env)` one plan earlier, and ADR-010 explicitly anticipates this plan
+      reusing it. Building a parallel `go build` into `t.TempDir()` would mean two build-and-exec
+      mechanisms and two compilations per package run. Drive the scenario through `runBinary`
+      against a fixture repo:
       (a) `INPUT_BUILD-TIMEOUT` unset → exit 0, the build passes;
       (b) `INPUT_BUILD-TIMEOUT=1ms` → exit 1, stdout contains `TIMED OUT` and `build-timeout`;
       (c) `INPUT_BUILD-TIMEOUT=2 minutes` → exit 1, stderr names the offending value, and **no

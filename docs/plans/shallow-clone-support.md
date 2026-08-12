@@ -151,6 +151,17 @@ in `main.go` and in both `action.yml` files, and **no** conflict on outputs (the
 `getEnv` line at the end of the block in `main.go`. That reduces both conflicts to
 append-append, which merges cleanly in practice.
 
+Two corrections to that guidance, from the plan review:
+
+- **It does not apply to a validation that must fail fast.** `build-timeout-handling` correctly
+  requires its `build-timeout` parse — pure, no I/O — to sit **above** this plan's `ResolveBase`,
+  so a config typo does not first pay for git work. Cheap validation goes first; anything that
+  triggers work goes last. Append-at-the-end is for the *read*, not for the *validation*.
+- **"Append at the end" beats `build-timeout-handling`'s "insert after `enable-helm`"**, which is
+  mid-block and lands in *different relative positions* in the two `action.yml` files (the wrapper
+  has no `kustomize-version`). Its own AC-7 demands the declarations be identical in both files,
+  so append-at-the-end is the guidance that actually satisfies it.
+
 #### C-2 — with complete-impact-matching: both touch `internal/reporter`, and both touch `main.go:63-76`
 
 complete-impact-matching Phase 3 adds parse-failure surfacing:
@@ -628,7 +639,10 @@ names the cause and the one-line remedy — and the E2E layer can finally assert
 - [ ] **Do not modify `run()` or any of the seven tests that use it.** The 31-test baseline is
       preserved by construction.
 - [ ] Self-check the harness against an existing full-clone fixture: exit 0, non-empty stdout,
-      four keys in `Outputs` (AC-P3).
+      and the four pre-existing keys **present** in `Outputs` (AC-P3). Assert presence, **not**
+      that there are exactly four — Phase 3 of this same plan adds `change-detection-mode`, so a
+      count assertion here breaks one phase later. Same defect class as `complete-impact-matching`
+      AC-C7 and `build-timeout-handling` AC-21.
 
 **Tasks — 2.2, the preflight branch and the diagnostic**:
 - [ ] In `main.go`, call `gitAnalyzer.ResolveBase(baseRef)` **before** `GetChangedFiles`.

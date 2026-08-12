@@ -735,7 +735,8 @@ proving the wrapper still reports what it reported before.
 
 **Tasks**:
 - [ ] Capture a "before" wrapper run: trigger the wrapper action on a real PR **against the
-      currently pinned SHA** (`action.yml:45`, `…:5f8b73cd346d12ddaaadba073391bf73864e6073`) and
+      currently pinned SHA** (`action.yml:45` — read it at execution time; do **not** rely on the
+      value recorded here, since every earlier plan bumps this pin and this plan lands last) and
       record its counts, exit code and run URL.
 - [ ] Merge this PR to `main`. GitVersion bumps per `gitversion.yml` (`feat:`/`fix:` etc.), the
       release workflow runs, the Phase 5 gate runs, the image is pushed with the commit SHA and
