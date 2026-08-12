@@ -548,7 +548,8 @@ by this plan.
       `kustomize-build-check-action/action.yml`, its `base-ref` description matches the
       implemented default, and its image pin (`action.yml:45`) points at a SHA containing
       Phase 3 (F-16, F-25, NF-06).
-- [ ] AC-P10: `fetch-depth: 0` and why it is required appear in **prose** in both READMEs — this
+- [ ] AC-P10: the literal string `fetch-depth: 0` appears in **both** READMEs, each time within
+      the same section as an explanation of what breaks without it — this
       repo's local-run section (`README.md:58-71`) and the wrapper's Inputs table region
       (`kustomize-build-check-action/README.md:65-72`) — and the wrapper README gains a
       `full-scan` section beside its existing "Skipped paths" section (F-26, F-27).

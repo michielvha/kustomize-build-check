@@ -413,7 +413,7 @@ public-contract decision that deserves its own spec.
 
 ## Acceptance Criteria
 
-IDs are the spec's own (§7), preserved verbatim for traceability. AC-15 to AC-19 are added by this
+IDs are the spec's own (§7), preserved verbatim for traceability. The **plan-added** ones are AC-15 to AC-22 and the AC-E series, each marked `(plan-added)` inline and each tracing to a spec requirement (AC-20→F-20, AC-21→NF-03, AC-22→F-10, AC-E*→NF-01/NF-05/NF-09). AC-15 to AC-19 are added by this
 plan.
 
 **Phase 1 — `internal/builder`**
@@ -426,6 +426,13 @@ plan.
       the output pipe returns within `limit + grace + slack`, and is classified `TimedOut == true`.
       (Without `WaitDelay` this returns only when the descendant exits — measured at **30.0 s**
       against a 300 ms deadline this session.)
+- [ ] AC-23 (F-11, plan-added): The limit is **per build, not per run**. With `build-timeout`
+      set to a value shorter than two sequential builds combined, a run of three affected
+      directories still attempts **all three** — the second and third are not skipped or aborted
+      because an earlier one timed out. Unit, `internal/builder` via the fake-command seam.
+- [ ] AC-24 (F-21, plan-added): No upper bound is imposed on `build-timeout`. A value far above any
+      plausible build (e.g. `24h`) parses, is accepted, and reaches the builder unmodified — the
+      tool never silently clamps it. Unit, `cmd/action` env parsing.
 - [ ] AC-22 (F-10, plan-added): `New()` and `NewWithTimeout(d)` both produce a builder whose
       `grace` equals `defaultWaitGrace`, and `defaultWaitGrace == 5 * time.Second`. Asserted by a
       unit test in `package builder` constructing through the **exported** constructors and reading

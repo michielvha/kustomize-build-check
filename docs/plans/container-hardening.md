@@ -395,6 +395,11 @@ docker- or CI-observable command. AC-15…AC-21 are added by this plan and label
 - [ ] **AC-1:** `docker inspect --format '{{json .Config.Entrypoint}}' <new image>` returns a
       **single-element** array containing neither `/bin/sh` nor `-c`, and
       `{{.Config.User}}` resolves to UID `1001`. (F-13, F-15)
+- [ ] **AC-1d (F-05, plan-added):** The pinned base digest is re-resolvable from an anonymous
+      client at release time, not only at authoring time: `crane manifest
+      cgr.dev/chainguard/wolfi-base@<digest>` (or an anonymous registry `GET` of that digest)
+      returns HTTP 200 in the release job, immediately before the image is built. A digest that has
+      been garbage-collected fails the build loudly rather than silently falling back to a tag.
 - [ ] **AC-1b (F-16, plan-added):** The single entrypoint element does **not** contain the
       workload name. Asserted mechanically:
       `docker inspect --format '{{index .Config.Entrypoint 0}}'` must not contain the value of
@@ -442,15 +447,25 @@ docker- or CI-observable command. AC-15…AC-21 are added by this plan and label
 - [ ] **AC-6:** `git diff --name-only main...HEAD` contains **no** `.go` path, and
       `git diff --stat main...HEAD -- go.mod go.sum` is empty. (NF-07)
 
+      **AC-5 and AC-6 are one-off gates for THIS change, not permanent CI steps.** They assert a
+      property of *this* diff ("the base swap touched no Go code"), so wiring them into
+      `image-check.yml` would fail every future PR that legitimately touches both the Dockerfile
+      and Go — for example a `digestabot` bump landing beside an unrelated change, or any later
+      plan that adds a test while adjusting the image. Verify them **manually at this PR's review**,
+      or as a step gated to this branch, and do **not** add them to the permanent workflow.
+
 **Base, build and pin**
 
 - [ ] **AC-8:** `tests/e2e/assert-pinned.sh` exits non-zero if any `FROM` line in `Dockerfile`
       lacks `@sha256:<64 hex>`; it runs as a required step in `image-check.yml`. (F-02)
 - [ ] **AC-9:** `docker buildx imagetools inspect` (or `docker manifest inspect`) of the pushed
       image lists exactly `linux/amd64` and `linux/arm64`. (F-03, `build-release.yml:82`)
-- [ ] **AC-12:** `Dockerfile` carries a comment stating which rung of the §5.3 ladder was used and
-      linking the **actual arm64 build run** that settled it. The string `--no-scripts` does not
-      appear in `Dockerfile`. (F-20)
+- [ ] **AC-12:** The string `--no-scripts` does not appear in `Dockerfile`
+      (`grep -c -- '--no-scripts' Dockerfile` returns `0`), and `Dockerfile` carries a comment
+      naming which rung of the §5.3 ladder was used. (F-20)
+      *The pass condition is the `grep` and the presence of the comment — both machine-checkable.
+      Pasting the arm64 run URL into that comment is expected but is documentation, not a gate: a
+      URL cannot be validated by CI and must not be able to fail the build.*
 - [ ] **AC-14:** Each tarball is verified with `sha256sum -c` against a pinned per-arch constant
       declared as a build `ARG`; removing or corrupting a constant fails the build. Demonstrated
       once by corrupting one constant in a scratch build. (F-23)
@@ -468,7 +483,11 @@ docker- or CI-observable command. AC-15…AC-21 are added by this plan and label
       none has been measured.** (F-26, §2)
 - [ ] **AC-18 (plan-added):** Compressed image size (`docker save | gzip -c | wc -c`, labelled as
       a proxy for registry-compressed size) is recorded for old and new, both arches, alongside
-      the scan. An increase greater than 10% requires a written justification in the same PR body.
+      the scan.
+      *The criterion is **that the four numbers are recorded**, which is machine-checkable. Size is
+      measured and reported, not gated: this plan's goal is CVE surface, not bytes, and a hard size
+      threshold would fail the change for the wrong reason. If the new image is materially larger,
+      note why in the PR body — as information, not as a gate.*
       (NF-06)
 
 **Release and rollback**
@@ -478,7 +497,9 @@ docker- or CI-observable command. AC-15…AC-21 are added by this plan and label
       code — as the run immediately before the bump, evidenced by both run URLs. (F-28)
 - [ ] **AC-20 (plan-added):** Each phase lands as **exactly one commit** (Phase 3's work packages
       excepted and named), so `git log --oneline` shows a one-to-one phase→commit mapping and
-      `git revert <sha>` is a complete rollback of that phase. Verified by inspecting the branch
+      `git revert <sha>` is a complete rollback of that phase. Checked mechanically with
+      `git log --oneline main..HEAD | wc -l` against the expected count rather than by eye. Also
+      verified by inspecting the branch
       log before merge. (Plan-added; rollback is the highest-stakes property here because a bad
       image reaches every downstream repo through the wrapper's SHA pin)
 - [ ] **AC-19 (plan-added):** `build-release.yml` lists `tests/e2e/**` under `paths-ignore`, so a

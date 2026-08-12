@@ -100,6 +100,8 @@ Nothing external blocks the start. Phases 1 and 2 can begin immediately.
 - `internal/integration/pipeline_test.go` — extended harness plus at least one end-to-end
   scenario per phase; this is the repo's E2E layer.
 - Unit tests in `internal/analyzer`, `internal/graph`, `internal/discovery`, `internal/reporter`.
+- `michielvha/kustomize-build-check-action`'s `action.yml` — the image SHA pin only (Phase 5).
+  Nothing else in that repo is touched.
 
 ### Out of Scope
 
@@ -250,7 +252,7 @@ Called out per phase so the reporting side is checked too, not only the analyzer
 
 ## Acceptance Criteria
 
-IDs are the spec's own (§7), preserved verbatim for traceability. AC-A7 and the AC-E series are
+IDs are the spec's own (§7), preserved verbatim for traceability. The **plan-added** ones are AC-A7, AC-A8, AC-A9, AC-B6, AC-B7, AC-C6, AC-C7, AC-C8, AC-C9, AC-D14 and the AC-E series — every one traces to a spec requirement, and each is marked `(plan-added)` inline. AC-A7 and the AC-E series are
 added by this plan.
 
 **Phase 1 — cross-directory matching (Group A, closes G1 and G5)**
@@ -288,8 +290,7 @@ added by this plan.
 - [ ] AC-B3: Editing `bases/v1.2/cm.yaml` produces an affected set equal to exactly
       `{<root>/bases/v1.2, <root>/overlays/dev}`.
 - [ ] AC-B4: A `resources` entry that is a genuine file (`cm.yaml`) produces **no** graph edge.
-      `TestExtractDependencies` is updated from 3 to 5 candidates with the rationale recorded in
-      [ADR-001](../decisions/ADR-001-graph-reference-classification.md), and is paired with a new
+      `TestExtractDependencies` is updated from 3 to 5 candidates and is paired with a new
       test asserting the **3 edges** actually produced.
 - [ ] AC-B5: A `resources` entry pointing at a path that does not exist produces no node, no
       edge, no panic and no error return — asserted explicitly, per ADR-001.
@@ -385,8 +386,13 @@ added by this plan.
       contains no `--diff-filter` (F-E5).
 - [ ] AC-E3: `TestCrossDirectorySiblingPrefixIsNotMatched` passes: resolved reference
       `/repo/shared` is never matched by `/repo/shared-old/x.yaml` (F-E2).
-- [ ] AC-E4: Every affected-set assertion added by the phase uses set equality, not containment
-      (F-E4).
+- [ ] AC-E4: Every affected-set assertion added by the phase goes through the shared
+      `assertAffected(t, got, want)` helper, which compares **sorted slices for equality** and
+      fails on any extra element as loudly as on a missing one (F-E4). Mechanically checkable:
+      no affected-set assertion in the phase's diff calls `slices.Contains` or a hand-rolled
+      containment loop.
+      *Previously worded as "uses set equality, not containment", which is a code-review property
+      its own Test Plan row could not assert — a hand-rolled containment check would have passed.*
 - [ ] AC-E5: `go.mod` lists exactly one `require` line (F-E7).
 - [ ] AC-E6: The `internal/integration` package reports `ok` in the phase's test run — it neither
       skipped for a missing binary nor ran zero tests (NF-09).
@@ -613,6 +619,30 @@ mitigated by its own dedicated test; (b) a mis-parsed field is a *silent* miss, 
 failure — mitigated by one scenario per surface, with zero surfaces lacking one; (c) more
 directories built per run — see OQ-5.
 
+### Phase 5: release and bump the consumer pin
+
+**Goal**: get the work in front of consumers. Merging any earlier phase publishes a new image, but
+the wrapper action pins by digest — until that pin moves, `@main` keeps serving the old image and
+**nobody sees any of this work**. This step was needed manually after PR #8 and is easy to forget
+because nothing in this repo fails without it.
+
+**Tasks**:
+- [ ] Merge the last phase to `main` and let `build-release.yml` run to completion. Do not assume
+      it succeeded — read the run.
+- [ ] Confirm the image tagged with the merge SHA is **present in GHCR** before touching the pin
+      (anonymous token + a `GET` of the manifest; a 200 is the gate).
+- [ ] Bump `image:` in `michielvha/kustomize-build-check-action`'s `action.yml` to that SHA.
+- [ ] Record one real PR run against the bumped wrapper, with its run URL (AC-A9).
+
+**Depends on**: whichever phase lands last. Each plan bumps the pin after its **own** last phase —
+do not defer to the end of the stack (see [Implementation Order](#implementation-order) for why
+that would break `container-hardening` AC-13).
+
+**Rollback / risk**: one line. `git revert` of the pin commit restores every consumer immediately,
+which makes this the cheapest rollback in the stack — and the reason the pin bump is kept as its
+own commit rather than folded into anything else. Risk: bumping the pin to a SHA whose image was
+never published, which the GHCR presence check exists to prevent.
+
 ## Test Plan
 
 `internal/integration/pipeline_test.go` is this repo's **E2E layer**: it builds real git
@@ -669,6 +699,11 @@ greppable:
 | AC-E4: set equality everywhere | Harness | `internal/integration/pipeline_test.go` — `assertAffected` helper |
 | AC-E5: one direct dependency | Manual gate | `go.mod` inspected at every phase gate |
 | AC-E6: integration package actually ran | Suite | `go test ./...` output shows `internal/integration ok` |
+| AC-E7: analyzer output contract (absolute, cleaned, deduped, non-nil, no error) | Unit | `internal/analyzer/analyzer_test.go` — `TestAffectedSetContract` |
+| AC-C8: unreadable kustomization is built, not dropped | **E2E** | `internal/integration/pipeline_test.go` — `TestUnreadableKustomizationIsBuiltNotDropped` |
+| AC-C9: field error still reaches the builder | **E2E** | `internal/integration/pipeline_test.go` — `TestFieldErrorStillReachesTheBuilder` |
+| AC-B7: deleted bare base fails its dependent overlay | **E2E** | `internal/integration/pipeline_test.go` — `TestDeletedBareBaseFailsDependentOverlay` |
+| AC-A9: release published and consumer pin bumped | Manual gate | GHCR manifest returns 200 for the merge SHA; wrapper `action.yml` pin updated; run URL recorded in the PR |
 
 ## Implementation Order
 
