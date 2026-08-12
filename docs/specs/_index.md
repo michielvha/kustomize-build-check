@@ -30,15 +30,22 @@ asymmetric.
 Every spec names the false-pass surfaces in its own stage. When an ambiguity arises, that bar
 decides which way it falls.
 
+## Active work
+
+| Spec | Status | Description |
+|------|--------|-------------|
+| [complete-impact-matching](./complete-impact-matching.spec.md) | Draft | Closes every false-pass surface in impact matching: cross-directory resource references, the unparsed reference fields (`patches`, `configMapGenerator`, `secretGenerator`, `helmCharts` and friends), unparseable kustomizations being silently dropped, and the `filepath.Ext` heuristic losing graph edges. Written to be delivered in phases. |
+
 ## Known gaps recorded by these specs
 
-These are documented limitations of shipped behaviour, not unmet requirements. Each is a
-candidate for its own spec before any code changes.
+These are documented limitations of **shipped** behaviour, not unmet requirements. The four
+false-pass rows are now owned by
+[complete-impact-matching](./complete-impact-matching.spec.md); the rest are unclaimed.
 
 | Gap | Spec | Effect |
 |-----|------|--------|
 | Cross-directory resource files are not matched | [impact-analysis](./impact-analysis.spec.md) | A kustomization referencing `../shared/cm.yaml` is not marked affected when that file changes. Verified: the run reports "No kustomizations affected". **False pass.** |
-| `patches` / `configMapGenerator` / `secretGenerator` are not parsed | [kustomization-discovery](./kustomization-discovery.spec.md) | A file referenced only through those fields never marks anything affected. Tracked in [TODO.md](../../TODO.md). **False pass.** |
+| `patches` / `configMapGenerator` / `secretGenerator` / `helmCharts` are not parsed | [kustomization-discovery](./kustomization-discovery.spec.md) | A file referenced only through those fields never marks anything affected. Verified: `helmCharts[].valuesFile` changes rendered output and its deletion breaks the build, so it is a real surface too. **False pass.** |
 | Unparseable kustomization YAML is warned and skipped | [kustomization-discovery](./kustomization-discovery.spec.md) | It is excluded from the graph, so nothing depending on it is validated. **False pass.** |
 | Dotted directory names lose graph edges | [kustomization-discovery](./kustomization-discovery.spec.md) | `filepath.Ext("../bases/v1.2")` is `".2"`, so the reference is treated as a file and the base→overlay edge is dropped. **False pass.** |
 | A timed-out build is indistinguishable from a failed one | [build-execution](./build-execution.spec.md) | Reported identically apart from a WARN log line. |
