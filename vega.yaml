@@ -1,0 +1,26 @@
+schema_version: 2
+# framework_version: the Vega framework semver this constitution was written against.
+framework_version: "0.14.5"
+
+# This is a personal OSS repo, not an Engie platform workload. It has no GitOps
+# overlays, no secret manager, no cluster bindings, so those blocks are omitted
+# on purpose: read-constitution reports them as "n/a" and no agent should ask.
+# Only the SDD loop (spec -> plan -> implement -> review) applies here.
+
+repo:
+  archetype: "go-cli-tool"
+  language: "go"
+  workload_name: "kustomize-build-check"
+
+# The only published artifact is the container image the action repo pins.
+# Recorded so specs can reference it without hardcoding the string.
+artifact:
+  kind: "container-image"
+  image: "ghcr.io/michielvha/kustomize-build-check"
+  consumer_repo: "michielvha/kustomize-build-check-action"
+
+workflow:
+  spec_mode: "assisted"
+  quality_gates: "harvest"
+  diagrams: true
+  token_efficiency: "rtk"

@@ -1,0 +1,45 @@
+# Spec Index
+
+Specs are the source of truth for behaviour in this repository. Changes start here, not in
+the code. See [CLAUDE.md](../../CLAUDE.md) for the constitution.
+
+All five specs below are **retro-specs**: they document behaviour that was already shipped
+and already covered by tests, with a `file:line` citation behind every claim. They supersede
+[design.md](../../design.md), which has drifted from the code in several places (recorded per
+spec).
+
+The pipeline runs in this order, and the specs are listed to match:
+
+| # | Spec | Package | Description |
+|---|------|---------|-------------|
+| 1 | [change-detection](./change-detection.spec.md) | `internal/git` | Producing the list of files changed between `base-ref` and `HEAD`, and why deletions are deliberately retained. |
+| 2 | [kustomization-discovery](./kustomization-discovery.spec.md) | `internal/discovery`, `internal/graph` | Finding every kustomization file, parsing its reference fields, and building the graph that propagates a base change to its overlays. |
+| 3 | [impact-analysis](./impact-analysis.spec.md) | `internal/analyzer` | Combining the changed files, the discovered kustomizations and the graph into the set of directories that must be validated. |
+| 4 | [build-execution](./build-execution.spec.md) | `internal/builder` | Running `kustomize build` per directory, and the skip guard that keeps a directory removed by the change from being reported as a failure. |
+| 5 | [result-reporting](./result-reporting.spec.md) | `internal/reporter`, `cmd/action` | Console report, GitHub Actions outputs, job step summary, and the exit code that makes the check red or green. |
+
+## The bar these specs encode
+
+From [CLAUDE.md](../../CLAUDE.md): this tool is a CI gate, so its failure modes are
+asymmetric.
+
+- **A false pass is worse than a false fail.** Reporting green on a repo where
+  `kustomize build` would fail defeats the tool's only purpose.
+- **A false fail trains people to ignore the check**, so it is not cheap either.
+
+Every spec names the false-pass surfaces in its own stage. When an ambiguity arises, that bar
+decides which way it falls.
+
+## Known gaps recorded by these specs
+
+These are documented limitations of shipped behaviour, not unmet requirements. Each is a
+candidate for its own spec before any code changes.
+
+| Gap | Spec | Effect |
+|-----|------|--------|
+| Cross-directory resource files are not matched | [impact-analysis](./impact-analysis.spec.md) | A kustomization referencing `../shared/cm.yaml` is not marked affected when that file changes. Verified: the run reports "No kustomizations affected". **False pass.** |
+| `patches` / `configMapGenerator` / `secretGenerator` are not parsed | [kustomization-discovery](./kustomization-discovery.spec.md) | A file referenced only through those fields never marks anything affected. Tracked in [TODO.md](../../TODO.md). **False pass.** |
+| Unparseable kustomization YAML is warned and skipped | [kustomization-discovery](./kustomization-discovery.spec.md) | It is excluded from the graph, so nothing depending on it is validated. **False pass.** |
+| Dotted directory names lose graph edges | [kustomization-discovery](./kustomization-discovery.spec.md) | `filepath.Ext("../bases/v1.2")` is `".2"`, so the reference is treated as a file and the base→overlay edge is dropped. **False pass.** |
+| A timed-out build is indistinguishable from a failed one | [build-execution](./build-execution.spec.md) | Reported identically apart from a WARN log line. |
+| `action.yml` documents a `base-ref` default the binary does not implement | [change-detection](./change-detection.spec.md) | Advertised as the PR base sha; the code implements `"" → HEAD~1`. Documentation defect. |
