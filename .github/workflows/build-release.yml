@@ -13,6 +13,14 @@ on:
       - 'README.md'
       - '.gitignore'
       - 'design.md'
+      # SDD artifacts. These change on every spec/plan/review cycle and never
+      # affect the binary, so they must not cut a release or push an image.
+      - 'CLAUDE.md'
+      - 'vega.yaml'
+      - 'docs/**'
+      - 'plans/**'
+      - 'summaries/**'
+      - 'TODO.md'
   workflow_dispatch:
 
 jobs:
