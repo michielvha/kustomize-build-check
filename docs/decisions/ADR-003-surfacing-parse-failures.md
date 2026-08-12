@@ -10,7 +10,7 @@ author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ## Status
 
 proposed — implements F-C1, F-C2, F-C2a and F-C3 of
-[complete-impact-matching.spec.md](../docs/specs/complete-impact-matching.spec.md),
+[complete-impact-matching.spec.md](../specs/complete-impact-matching.spec.md),
 whose OQ-1 is already resolved as option (d), "always affected". Landed in Phase 3 of
 [plans/complete-impact-matching.md](../plans/complete-impact-matching.md).
 

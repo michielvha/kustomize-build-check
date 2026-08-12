@@ -10,7 +10,7 @@ author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ## Status
 
 proposed — implements F-C5, F-C6 and NF-06 of
-[complete-impact-matching.spec.md](../docs/specs/complete-impact-matching.spec.md).
+[complete-impact-matching.spec.md](../specs/complete-impact-matching.spec.md).
 Landed in Phase 3, consumed by Phase 4 of
 [plans/complete-impact-matching.md](../plans/complete-impact-matching.md).
 

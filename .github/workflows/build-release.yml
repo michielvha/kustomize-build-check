@@ -15,11 +15,10 @@ on:
       - 'design.md'
       # SDD artifacts. These change on every spec/plan/review cycle and never
       # affect the binary, so they must not cut a release or push an image.
+      # All of them live under docs/ (specs, plans, decisions, summaries).
       - 'CLAUDE.md'
       - 'vega.yaml'
       - 'docs/**'
-      - 'plans/**'
-      - 'summaries/**'
       - 'TODO.md'
   workflow_dispatch:
 

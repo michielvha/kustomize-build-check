@@ -34,7 +34,7 @@ found it.
 
 `kustomize-build-check` is a CI gate. `CLAUDE.md` states the bar it is held to: **a false pass
 is worse than a false fail**, because reporting green on a repo where `kustomize build` would
-fail defeats the tool's only purpose. [`docs/specs/complete-impact-matching.spec.md`](../docs/specs/complete-impact-matching.spec.md)
+fail defeats the tool's only purpose. [`docs/specs/complete-impact-matching.spec.md`](../specs/complete-impact-matching.spec.md)
 records four ways the tool currently reports green while validating nothing, and specifies the
 fix as four requirement groups (A–D) plus cross-cutting invariants (E).
 

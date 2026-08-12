@@ -10,7 +10,7 @@ author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ## Status
 
 proposed — resolves OQ-2 of
-[complete-impact-matching.spec.md](../docs/specs/complete-impact-matching.spec.md) §10,
+[complete-impact-matching.spec.md](../specs/complete-impact-matching.spec.md) §10,
 which blocks Phase 2 of [plans/complete-impact-matching.md](../plans/complete-impact-matching.md).
 
 ## Context

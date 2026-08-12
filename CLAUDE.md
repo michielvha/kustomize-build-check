@@ -13,7 +13,7 @@ Keep this file narrative and small; structured bindings live in `vega.yaml`.
 ## Non-negotiables
 
 - **Specs are the source of truth.** Behavior changes start at `docs/specs/`, not at the code.
-- **The reviewer subagent's write scope** is `summaries/**` and `plans/*.md`. Findings are
+- **The reviewer subagent's write scope** is `docs/summaries/**` and `docs/plans/*.md`. Findings are
   recorded as review notes, never as silent source edits.
 - **Bindings have one home: `vega.yaml`.** Nothing hardcodes the image name or the consumer
   repo; read it through the `read-constitution` skill.
