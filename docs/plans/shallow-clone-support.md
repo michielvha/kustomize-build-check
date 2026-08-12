@@ -371,7 +371,7 @@ func Dirs(files []KustomizeFile) []string
 ```
 
 `Dir` is already absolute (`discovery.go:91-97`), which is the same shape the analyzer emits
-today (`analyzer.go:85-88`), so nothing downstream changes: `builder.BuildAll` receives the
+today (`analyzer.go:72-80`), so nothing downstream changes: `builder.BuildAll` receives the
 same kind of list it always has. Impact analysis is **skipped**, not fed a synthetic file
 list. The dependency graph is still built (F-13) so the pipeline keeps one shape and one
 orchestration branch.
@@ -494,6 +494,12 @@ by this plan.
       `full-scan` marker naming the reason is present in `$GITHUB_STEP_SUMMARY` (F-21, F-22).
 - [ ] AC-7: Same shallow setup with `on-unresolvable-base: fail` exits **1**, performs **zero**
       `kustomize build` invocations, and emits the AC-4 diagnostic (F-10).
+- [ ] AC-P12 (F-10/F-21, plan-added): On the `on-unresolvable-base: fail` path `$GITHUB_OUTPUT`
+      is **empty** — no `change-detection-mode`, no `failed-count`, no `success-count`, no
+      `skipped-count`, no `results` — and `$GITHUB_STEP_SUMMARY` is unwritten. Asserted via
+      `runBinary` in `TestOnUnresolvableBaseFailPerformsNoBuilds`.
+      *This is the behaviour F-21's new exemption requires, and it matches today's exit-1 path,
+      which never reaches `SetGitHubOutputs` (`main.go:34-37`).*
 - [ ] AC-8: `on-unresolvable-base: FAIL` (wrong case) and `on-unresolvable-base: banana` both
       behave exactly as `validate-all` and log a warning naming the offending value — neither
       may behave as `fail` (F-15).
@@ -829,7 +835,7 @@ repositories and runs the real pipeline against a real `kustomize`. From Phase 2
 executes the real `cmd/action` binary
 ([ADR-010](../decisions/ADR-010-e2e-through-the-real-binary.md)), which is what makes exit
 codes, `INPUT_*` parsing and `$GITHUB_OUTPUT` assertable at all. There is no UI and no HTTP
-surface, so this is where the E2E rows live — **every phase has at least one, driven through a
+surface, so this is where the E2E rows live — **Phases 2 and 3 carry the E2E coverage. Phase 1 (pure extraction, no user-visible surface) and Phase 4 (wrapper declarations and docs) have none, by design.** The Phase 2-3 rows are driven through a
 real `--depth 1` clone where the criterion is about shallowness.**
 
 Every test added by this plan carries a traceability comment on its first line, so criteria are
@@ -874,7 +880,7 @@ greppable:
 **Reused fixtures.** AC-12's superset assertion runs the *same* origin twice — once as a full
 clone (diff mode) and once as its `--depth 1` clone (full-scan mode) — and the fixture is the
 deleted-but-still-referenced shape that `TestDeletedResourceStillReferencedFails`
-(`pipeline_test.go:409-434`) already guards. That test itself is **not modified**; the new one
+(`pipeline_test.go:415-434`) already guards. That test itself is **not modified**; the new one
 sits beside it.
 
 ## Implementation Order

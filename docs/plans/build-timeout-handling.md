@@ -426,6 +426,13 @@ plan.
       the output pipe returns within `limit + grace + slack`, and is classified `TimedOut == true`.
       (Without `WaitDelay` this returns only when the descendant exits — measured at **30.0 s**
       against a 300 ms deadline this session.)
+- [ ] AC-22 (F-10, plan-added): `New()` and `NewWithTimeout(d)` both produce a builder whose
+      `grace` equals `defaultWaitGrace`, and `defaultWaitGrace == 5 * time.Second`. Asserted by a
+      unit test in `package builder` constructing through the **exported** constructors and reading
+      the unexported field. A zero `grace` fails the test.
+      *Required because ADR-009 moved the grace out of a `const` into a field: without this,
+      nothing fails if a constructor forgets to set it, and a zero `WaitDelay` silently restores
+      the unbounded-`Run()` defect in production while every other test stays green.*
 - [ ] AC-11 (F-35, F-36): `go test ./internal/builder` passes on a machine with **no** `kustomize`
       on `PATH`, covers cases (a)–(d) of F-36, and adds under 2 seconds of runtime.
 - [ ] AC-12 (F-06, NF-06): A fake command that exits non-zero well within the limit yields
@@ -759,7 +766,7 @@ nothing when it is not — which is OQ-7, still open.
 
 `internal/integration/pipeline_test.go` is this repo's **E2E layer**: it builds real git
 repositories, runs the real pipeline and shells out to a real `kustomize` binary. There is no UI
-and no HTTP surface, so this is where the E2E rows live. **Every phase has at least one.**
+and no HTTP surface, so this is where the E2E rows live. **Phases 1-3 each have at least one. Phase 4 (both `action.yml` files, wrapper README, image pin) has none** — it is declaration and release work, covered by AC-7's parity check and AC-15's wiring test in Phase 3, which is what actually proves the input is read rather than merely declared.
 
 Every test added by this plan carries a traceability comment on its first line, so criteria are
 greppable:

@@ -57,7 +57,7 @@ digest, matching how the consumer action already pins this tool
 |---|---|
 | Reduce the CVE surface of the released image | A **measured** before/after scan (Trivy or Grype, same scanner, same version, same day, both architectures) is attached to the PR; the new image reports **strictly fewer** total findings and **no new** HIGH or CRITICAL finding than `alpine:3.23`-based `:latest`. No numeric target is asserted here because none has been measured (§10) |
 | Change nothing the tool validates, skips, counts or reports | `go test ./... -count=1` passes unchanged (no test file is edited by this change), **and** the image-level smoke test (AC-4) produces byte-identical stdout counts and the same exit code as the current image on the same fixture repo |
-| Keep both published architectures working | `docker buildx` produces a manifest list with `linux/amd64` **and** `linux/arm64` (`build-release.yml:83`), and the smoke test runs on both |
+| Keep both published architectures working | `docker buildx` produces a manifest list with `linux/amd64` **and** `linux/arm64` (`build-release.yml:82`), and the smoke test runs on both |
 | Remove the shell from the process tree | The image's `ENTRYPOINT` is exec-form with no `/bin/sh -c`; `docker inspect` shows a single-element entrypoint |
 | Make the base reproducible | `FROM` references a `sha256:` digest, not a floating tag |
 | Add no Go dependency | `go.mod` `require` block is unchanged; `go list -m all \| wc -l` is unchanged |
@@ -82,7 +82,7 @@ Priority scale: P0 = launch blocker, P1 = important, P2 = nice-to-have.
 | ID | Priority | Requirement | Notes / evidence |
 |---|---|---|---|
 | F-07 | P0 | `git` MUST be present on `PATH` and executable by the runtime user. It is a hard runtime dependency: `internal/git/git.go:41` runs `exec.Command("git", "diff", "--name-only", baseRef, headRef)` and a start failure aborts the run with exit 1 (`cmd/action/main.go:34-37`). | `git` is not in `wolfi-base` (verified 2026-08-12 by listing every layer of the amd64 manifest: no `usr/bin/git`), but **is** in the Wolfi apk repository at `2.55.0-r4` for **both** `x86_64` and `aarch64` (`https://packages.wolfi.dev/os/{x86_64,aarch64}/APKINDEX.tar.gz`, fetched 2026-08-12) |
-| F-08 | P0 | `kustomize` MUST be present on `PATH` at the version currently shipped (`v5.8.1`) and MUST remain resolvable by **bare name** through `PATH`, not by absolute path. | `internal/builder/builder.go:78`; version at `Dockerfile:20`; contract restated at `build-execution.spec.md` F-10, F-13, NF-07. `KUSTOMIZE_VERSION` MUST stay in sync with `build-release.yml:49` |
+| F-08 | P0 | `kustomize` MUST be present on `PATH` at the version currently shipped (`v5.8.1`) and MUST remain resolvable by **bare name** through `PATH`, not by absolute path. | `internal/builder/builder.go:78`; version at `Dockerfile:20`; contract restated at `build-execution.spec.md` F-10, F-13, NF-07. `KUSTOMIZE_VERSION` MUST stay in sync with `build-release.yml:48` |
 | F-09 | P0 | `helm` MUST be present on `PATH` at the version currently shipped (`v4.2.3`), unless OQ-2 resolves otherwise. It is invoked by `kustomize` under `--enable-helm`, never by this tool. | `Dockerfile:28-34`; `build-execution.spec.md` F-13 and the `--enable-helm` edge-case row |
 | F-10 | P0 | All three binaries MUST be executable **as the non-root runtime user**, verified by running them, not by `ls`. | `Dockerfile:50-51` sets this today only for the tool binary |
 | F-11 | P0 | The image MUST NOT alter what is validated, what is skipped, the success/failure/skipped counts, the stdout report, the `GITHUB_OUTPUT` values, the step summary, or the exit code. | Whole-pipeline contract: `build-execution.spec.md`, `result-reporting.spec.md`, `internal/reporter/reporter.go:45-54`, `cmd/action/main.go:105-108` |
@@ -96,7 +96,7 @@ Priority scale: P0 = launch blocker, P1 = important, P2 = nice-to-have.
 | F-14 | P0 | `git config --system --add safe.directory '*'` MUST still be in effect at runtime, applied as root at build time before the `USER` switch. Its absence makes `git diff` fail on the runner-owned workspace, which aborts the run at `main.go:34-37`. | `Dockerfile:40-42` |
 | F-15 | P0 | `ENTRYPOINT` MUST be exec-form and MUST NOT invoke a shell. The current `["/bin/sh", "-c", "/usr/local/bin/${IMAGE_NAME}"]` exists **only** to expand `${IMAGE_NAME}`. | `Dockerfile:58`. No Go code reads `argv[0]` or `IMAGE_NAME` (grep of `cmd/`, `internal/`: the only env reads are `INPUT_*` via `main.go:119`, `GITHUB_OUTPUT` and `GITHUB_STEP_SUMMARY` at `reporter.go:104`, `:145`) |
 | F-16 | P0 | Removing the shell MUST NOT hardcode the image name, which is a binding owned by `vega.yaml` ("Nothing hardcodes the image name or the consumer repo", `CLAUDE.md`). The binary MUST therefore be installed at a **name-agnostic** path (e.g. `/usr/local/bin/entrypoint`) so the exec-form `ENTRYPOINT` contains no binding. | Behaviour-neutral: nothing reads the binary's filename (see F-15 evidence) |
-| F-17 | P1 | `ARG IMAGE_NAME` MUST be retained for the `COPY` source path, which depends on GoReleaser's dist layout (`dist/${IMAGE_NAME}_${TARGETOS}_${TARGETARCH}*/${IMAGE_NAME}`), and is supplied by `docker-release-action`'s `project` parameter. | `Dockerfile:5`, `:44-47`; `build-release.yml:81` |
+| F-17 | P1 | `ARG IMAGE_NAME` MUST be retained for the `COPY` source path, which depends on GoReleaser's dist layout (`dist/${IMAGE_NAME}_${TARGETOS}_${TARGETARCH}*/${IMAGE_NAME}`), and is supplied by `docker-release-action`'s `project` parameter. | `Dockerfile:5`, `:44-47`; `build-release.yml:80` |
 | F-18 | P2 | `ENV IMAGE_NAME` MAY be dropped from the runtime image once the entrypoint no longer expands it, unless a consumer is shown to read it. | `Dockerfile:11` |
 
 #### 3.4 Build mechanics
@@ -128,7 +128,7 @@ Priority scale: P0 = launch blocker, P1 = important, P2 = nice-to-have.
 | NF-02 | Security | The final image MUST run as non-root (F-13) and MUST NOT contain a setuid binary that `alpine:3.23` did not already justify. |
 | NF-03 | Security | Base image provenance: the chosen base MUST be a signed Chainguard/Wolfi image. Cosign verification of the base is optional for this change but the digest pin (F-02) is not. |
 | NF-04 | Reliability | The registry hosting the base is a new build-time dependency. Chainguard states it "does not offer an SLA for uptime for the Chainguard's registry" (<https://edu.chainguard.dev/chainguard/containers/chainguard-registry/overview.md>). A base-registry outage may block a release; it MUST NOT be able to publish a *broken* image (F-12, F-25 fail closed). |
-| NF-05 | Portability | Wolfi is **glibc**-based (`glibc-2.43-r12` observed in `wolfi-base`, 2026-08-12), Alpine is musl. This is safe **only** because every shipped binary is statically linked: our binary is built `CGO_ENABLED=0` (`.goreleaser.yml:5-9`), and kustomize v5.8.1 and helm v4.2.3 were verified statically linked with `file` on the released linux/amd64 artefacts ("ELF 64-bit LSB executable … statically linked"). Any future dynamically linked addition invalidates this and MUST re-verify. |
+| NF-05 | Portability | Wolfi is **glibc**-based (`glibc-2.43-r12` observed in `wolfi-base`, 2026-08-12), Alpine is musl. The swap is safe under a **two-part** invariant, not a single one. **(a)** Every binary installed by **tarball or `COPY`** MUST be statically linked, because nothing in the image resolves an interpreter or shared libraries for them: our binary (`CGO_ENABLED=0`, `.goreleaser.yml:5-9`), kustomize v5.8.1 and helm v4.2.3, all verified with `file` on the released linux/amd64 artefacts. **(b)** Every binary installed by **`apk` from the Wolfi repository** — today only `git` (F-07) — MAY be dynamically linked against the base's own glibc, because `apk` installs its dependency closure into the same image. Such binaries MUST be proven by **executing** them as the non-root runtime user (F-10, AC-2), never by `file`. Note (b) already applied to the current `alpine:3.23` image, whose `git` is likewise dynamically linked (against musl), so this is a clarification of a pre-existing invariant, not a new exposure. Any future addition MUST be classified into (a) or (b) and verified accordingly. |
 | NF-06 | Performance | Image pull time in CI MUST NOT regress materially. Record compressed image size before and after alongside the scan (F-26). |
 | NF-07 | Maintainability | No new Go module. `go.mod` and `go.sum` MUST be untouched by this change (`CLAUDE.md`, "reuse before you build"). |
 | NF-08 | Compatibility | The image's external contract is unchanged: same `INPUT_*` env var names, same `GITHUB_OUTPUT` keys, same exit-code semantics. A consumer that pins the new SHA needs no other edit. |
@@ -193,15 +193,15 @@ flowchart TD
 | Exit code | Non-zero iff `summary.Failed > 0` and `fail-on-error` is true; skipped never fails | `main.go:105-108`; `build-execution.spec.md` |
 | User | UID 1001, non-root | `Dockerfile:36-38`, `:54` |
 | Working directory | A home directory is set (`Dockerfile:55`); the Actions runner overrides the working directory when it invokes a Docker action, so **nothing may depend on `WORKDIR`** | `Dockerfile:55`. The exact runner invocation is `[unverified - verify before relying]`; the smoke test MUST therefore pass `-w` explicitly rather than rely on the image default |
-| Architectures | `linux/amd64`, `linux/arm64` | `build-release.yml:83` |
+| Architectures | `linux/amd64`, `linux/arm64` | `build-release.yml:82` |
 
 #### 6.2 Build-time contract
 
 | ARG | Meaning | Source |
 |---|---|---|
-| `IMAGE_NAME` | GoReleaser dist path component; supplied as `project` by `docker-release-action` | `Dockerfile:5`, `build-release.yml:81` |
+| `IMAGE_NAME` | GoReleaser dist path component; supplied as `project` by `docker-release-action` | `Dockerfile:5`, `build-release.yml:80` |
 | `TARGETARCH`, `TARGETOS` | Set by buildx | `Dockerfile:7-8` |
-| `KUSTOMIZE_VERSION` | Default `v5.8.1`; must match `build-release.yml:49` | `Dockerfile:20` |
+| `KUSTOMIZE_VERSION` | Default `v5.8.1`; must match `build-release.yml:48` | `Dockerfile:20` |
 | `HELM_VERSION` | Default `v4.2.3` | `Dockerfile:28` |
 
 #### 6.3 Smoke test contract (new)
@@ -249,7 +249,7 @@ a degraded `git` would silently change the counts rather than crash
 - [ ] **AC-8:** The `FROM` line(s) in `Dockerfile` contain a `sha256:` digest. A CI check (or a
       documented review step) rejects a `FROM` without a digest. (F-02)
 - [ ] **AC-9:** The built manifest is a multi-arch manifest list containing exactly
-      `linux/amd64` and `linux/arm64`. (F-03, F-13 of `build-release.yml:83`)
+      `linux/amd64` and `linux/arm64`. (F-03, F-13 of `build-release.yml:82`)
 - [ ] **AC-10:** `docker run --rm --entrypoint <shell> <new image> -c 'command -v wget'` finds
       nothing, and no apk cache directory is populated in the final image. (F-22, NF-01)
 - [ ] **AC-11:** The build fails (non-zero, no push) if `git`, `kustomize` or `helm` is removed

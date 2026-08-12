@@ -119,8 +119,10 @@ Inherited verbatim from spec §9, plus two additions from the brief:
 10. `docs/specs/_index.md`.
 11. **Container hardening** (alpine → Wolfi base). Parked in `TODO.md` for its own spec after
     this plan lands.
-12. **Building the dependency graph from the pre-change tree.** Would close the residual gap in
-    OQ-6; a separate feature.
+12. **Building the dependency graph from the pre-change tree.** Still out of scope — but note it
+    is **no longer** what OQ-6 needs. OQ-6 is closed inside Phase 2 by recording the reverse edge
+    even when no node was discovered at the resolved path (see Open Questions). A pre-change-tree
+    graph remains a separate, larger feature that nothing here depends on.
 
 ## Design
 
@@ -312,6 +314,18 @@ added by this plan.
       `SkipReason` and `Failed == 0` for that path (F-C4, F-E3).
 - [ ] AC-C6: An unparseable kustomization still produces a graph **node** at its directory, so a
       kustomization that references it keeps its edge and its dependents still propagate (F-C2a).
+- [ ] AC-A9 (plan-added, Phase 5 release gate): After the last phase merges, the image tagged
+      with the merge SHA is confirmed **present in GHCR before** any pin edit; then
+      `kustomize-build-check-action/action.yml`'s `image:` pin is bumped to that SHA and one real
+      PR run against the bumped wrapper is recorded with its run URL. Rollback is a one-line
+      revert of the pin, which restores every consumer immediately.
+      *Modelled on `container-hardening` AC-13, which covers the identical cross-repo step.*
+- [ ] AC-E7 (F-E6, plan-added): `GetAffectedKustomizations` still returns paths that are
+      **absolute**, `filepath.Clean`ed and **de-duplicated**, returns a non-nil empty slice rather
+      than `nil` when nothing is affected, and still has no `error` return. Asserted by a unit test
+      over a non-trivial input (duplicate routes to one directory, a `..`-containing reference, an
+      unparseable entry). *F-E6 is P0 and had no criterion; Phase 3 adds the always-affected rule
+      and Phase 4 swaps `Resources`→`FileRefs`, and both touch this return path.*
 - [ ] AC-C7: **this phase** adds no key to `SetGitHubOutputs` and changes the shape of none of the
       four existing keys (`failed-count`, `success-count`, `skipped-count`, `results`); the
       `results` JSON schema is unchanged (no fourth result class).
@@ -568,7 +582,7 @@ directories built per run — see OQ-5.
 
 `internal/integration/pipeline_test.go` is this repo's **E2E layer**: it builds real git
 repositories, runs the real pipeline and shells out to a real `kustomize` binary. There is no UI
-and no HTTP surface, so this is where the E2E rows live. Every phase has at least one.
+and no HTTP surface, so this is where the E2E rows live. **Phases 1-4 each have at least one. Phase 5 (release + consumer pin bump) deliberately has none** — it is a cross-repo release step verified by AC-A9's recorded run URL, not by a Go test.
 
 Every test added by this plan carries a traceability comment on its first line, so criteria are
 greppable:

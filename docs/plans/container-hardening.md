@@ -48,7 +48,7 @@ behaviour, the tool degrades, and the check still reports green.
 **Nothing in CI can currently catch that.** `go test ./... -count=1` runs on the CI host
 (`build-release.yml:47-58`), not inside the image. The integration suite calls the packages
 directly (`internal/integration/pipeline_test.go:113-140`) and shells out to whatever `kustomize`
-is on the *runner's* PATH (installed at `build-release.yml:47-54`), never to the one baked into
+is on the *runner's* PATH (installed at `build-release.yml:46-53`), never to the one baked into
 the image. The released artifact has, today, **zero** automated verification of its own contents.
 
 There is a second, related gap found while planning: **this repo has no pull-request CI at all.**
@@ -98,7 +98,7 @@ proven by running it as UID 1001* (AC-2).
 | PR-triggered CI | **Does not exist** | Created by Phase 1 as `.github/workflows/image-check.yml`. Without it there is nowhere to run the before/after scan on a PR |
 | `docker buildx` + QEMU (or an arm64 runner) | Required from Phase 1 | `docker/setup-buildx-action` + `docker/setup-qemu-action`. Native `ubuntu-24.04-arm` runners are preferred if this repo qualifies — `[unverified]`, see OQ-6 |
 | `goreleaser build --snapshot --clean` | Required from Phase 1 | The image `COPY`s from `dist/` (`Dockerfile:44-47`, F-19); a PR-time build has no release artefacts, so the PR workflow must produce `dist/` itself |
-| `michielvha/docker-release-action@main` | Existing, third-party (own) | It builds **and pushes** in one step (`build-release.yml:75-84`). Whether a pre-push hook can be inserted is `[unverified]` — Phase 5 works around it rather than depending on it |
+| `michielvha/docker-release-action@main` | Existing, third-party (own) | It builds **and pushes** in one step (`build-release.yml:74-83`). Whether a pre-push hook can be inserted is `[unverified]` — Phase 5 works around it rather than depending on it |
 | Trivy (or Grype), pinned version | Required from Phase 2 | Same scanner, same version, same day, both arches, before and after (F-26, AC-7) |
 | `kustomize-build-check-action` repo write access | Required by Phase 7 only | `action.yml:45` pin bump (F-28, AC-13) |
 | Go source, `go.mod`, `go.sum` | **Untouched** | AC-6 enforces this by diff inspection |
@@ -137,7 +137,7 @@ Inherited from spec §9, restated so `/implement` does not have to cross-read:
 5. Impact-matching correctness — `complete-impact-matching.spec.md`.
 6. **Changing the kustomize or helm version.** Doing both at once makes an AC-4 parity failure
    ambiguous. `KUSTOMIZE_VERSION=v5.8.1` and `HELM_VERSION=v4.2.3` stay exactly as they are, and
-   `KUSTOMIZE_VERSION` stays in sync with `build-release.yml:49` (F-08, F-24).
+   `KUSTOMIZE_VERSION` stays in sync with `build-release.yml:48` (F-08, F-24).
 7. Everything in `build-execution.spec.md` except its F-13 (*"the released image ships kustomize
    v5.8.1 and helm v4.2.3 on `/usr/local/bin`"*) — and only the *how*, never the *what*. Its F-10
    (bare-name `PATH` resolution), F-11 (`--enable-helm` conditional), NF-04 (2-minute kill timer)
@@ -165,7 +165,7 @@ Inherited from spec §9, restated so `/implement` does not have to cross-read:
 | User | `addgroup`/`adduser` UID 1001 (`:36-38`) | `addgroup -g 1001 app` / `adduser -D -u 1001 -G app app`, `USER 1001:1001` | F-13 |
 | git config | `git config --system --add safe.directory '*'` (`:42`) | Unchanged | F-14 |
 | `ENV IMAGE_NAME` | Set at `:11` | **Dropped**. Nothing reads it (spec F-15 evidence: the only env reads are `INPUT_*`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY`, `LOG_LEVEL`) | F-18 |
-| `ARG IMAGE_NAME` | `:5` | **Retained** — the `COPY` source path needs it, and `docker-release-action` supplies it as `project` (`build-release.yml:81`) | F-17 |
+| `ARG IMAGE_NAME` | `:5` | **Retained** — the `COPY` source path needs it, and `docker-release-action` supplies it as `project` (`build-release.yml:80`) | F-17 |
 | `ENTRYPOINT` | `["/bin/sh","-c","/usr/local/bin/${IMAGE_NAME}"]` (`:58`) | `["/usr/local/bin/entrypoint"]` | F-15, F-16 |
 
 ### 5.2 The `${IMAGE_NAME}` knot, and how F-16 unties it
@@ -395,6 +395,19 @@ docker- or CI-observable command. AC-15…AC-21 are added by this plan and label
 - [ ] **AC-1:** `docker inspect --format '{{json .Config.Entrypoint}}' <new image>` returns a
       **single-element** array containing neither `/bin/sh` nor `-c`, and
       `{{.Config.User}}` resolves to UID `1001`. (F-13, F-15)
+- [ ] **AC-1b (F-16, plan-added):** The single entrypoint element does **not** contain the
+      workload name. Asserted mechanically:
+      `docker inspect --format '{{index .Config.Entrypoint 0}}'` must not contain the value of
+      `vega.yaml`'s `repo.workload_name`, and `grep -c 'ENTRYPOINT.*kustomize-build-check'
+      Dockerfile` must return `0`. Run as a required step in `image-check.yml`.
+      *F-16 is P0 and had no criterion at all. `ENTRYPOINT ["/usr/local/bin/kustomize-build-check"]`
+      satisfies AC-1 while violating F-16 and `CLAUDE.md`'s "nothing hardcodes the image name".*
+- [ ] **AC-1c (F-01/F-04/F-19, plan-added):** The built image's base is the digest-pinned Wolfi
+      image (`grep -E '^FROM cgr\.dev/chainguard/wolfi-base@sha256:' Dockerfile` returns 1), the
+      build succeeds from a registry-anonymous environment (no `docker login` to `cgr.dev`), and a
+      `docker export | tar -t` listing contains **no** Go toolchain (`go`, `gofmt`).
+      *F-01, F-04 and F-19 are all P0 and were all uncovered: every other AC would pass on an
+      alpine image that happened to be digest-pinned.*
 - [ ] **AC-2:** With `-u 1001:1001` and `--entrypoint` set to each binary in turn,
       `git --version`, `kustomize version` and `helm version` each exit `0`; `kustomize version`
       output contains `v5.8.1` and `helm version` output contains `v4.2.3`. (F-07…F-10)
@@ -434,7 +447,7 @@ docker- or CI-observable command. AC-15…AC-21 are added by this plan and label
 - [ ] **AC-8:** `tests/e2e/assert-pinned.sh` exits non-zero if any `FROM` line in `Dockerfile`
       lacks `@sha256:<64 hex>`; it runs as a required step in `image-check.yml`. (F-02)
 - [ ] **AC-9:** `docker buildx imagetools inspect` (or `docker manifest inspect`) of the pushed
-      image lists exactly `linux/amd64` and `linux/arm64`. (F-03, `build-release.yml:83`)
+      image lists exactly `linux/amd64` and `linux/arm64`. (F-03, `build-release.yml:82`)
 - [ ] **AC-12:** `Dockerfile` carries a comment stating which rung of the §5.3 ladder was used and
       linking the **actual arm64 build run** that settled it. The string `--no-scripts` does not
       appear in `Dockerfile`. (F-20)
@@ -499,8 +512,13 @@ fail closed when a runtime binary is missing — all while the image is still `a
       baseline is honest, and Phase 3 flips them to required.
 - [ ] `tests/e2e/assert-pinned.sh` (AC-8). Also known-red on alpine; wire it as advisory now,
       required from Phase 3.
-- [ ] `.github/workflows/image-check.yml` — `on: pull_request` (paths: `Dockerfile`,
-      `tests/e2e/**`, `.github/workflows/image-check.yml`, `.goreleaser.yml`) plus
+- [ ] `.github/workflows/image-check.yml` — `on: pull_request`. **Do NOT add a `paths:` filter.**
+      An earlier draft filtered to `Dockerfile`, `tests/e2e/**`, `.github/workflows/image-check.yml`
+      and `.goreleaser.yml`, which would mean the gate **never fires on the three behavioural
+      plans' PRs** — they touch none of those paths — directly contradicting the stated reason for
+      pulling Phases 1-2 forward (to give those plans a pull-request-time gate). The goreleaser +
+      buildx cost on every PR is the price of the gate actually existing; if that cost proves too
+      high, drop the pull-forward rationale rather than the trigger. Plus
       `workflow_dispatch`. Steps: checkout (`fetch-depth: 0`), setup-go, setup-qemu, setup-buildx,
       `goreleaser build --snapshot --clean`, then per platform `docker buildx build --load
       --platform <p> --build-arg IMAGE_NAME=<from vega.yaml, not hardcoded in the script>`,
@@ -575,7 +593,7 @@ Lands as **three commits** so rollback stays granular (the one exception to AC-2
       [ADR-013](../decisions/ADR-013-tarball-integrity.md)). Obtain the four constants from the
       upstream published checksums and record where each came from, in a comment.
 - [ ] Keep `KUSTOMIZE_VERSION=v5.8.1` and `HELM_VERSION=v4.2.3` as `ARG`s with the same names and
-      defaults (F-24). Confirm `KUSTOMIZE_VERSION` still matches `build-release.yml:49`.
+      defaults (F-24). Confirm `KUSTOMIZE_VERSION` still matches `build-release.yml:48`.
 
 **Tasks — 3.2, the runtime stage**:
 - [ ] Same digest-pinned base, target platform. `apk add --no-cache git`, **without**
@@ -653,7 +671,7 @@ a broken image.
 **Goal**: `build-release.yml` cannot push an image that fails the smoke test.
 
 **Tasks**:
-- [ ] Insert, between the GoReleaser step (`build-release.yml:68-72`) and the push step
+- [ ] Insert, between the GoReleaser step (`build-release.yml:67-71`) and the push step
       (`:75-84`): setup-qemu/buildx, `docker buildx build --load` per platform from the **same**
       `dist/` GoReleaser just produced, then `contract.sh` and `smoke.sh` on both. Any failure
       fails the job **before** `docker-release-action` runs (**AC-11**).
@@ -871,7 +889,7 @@ reaches every downstream repo through the wrapper's SHA pin) and gain nothing fr
 ## Open Questions
 
 1. **OQ-5 (new, blocking Phase 5's confidence, owner: repo owner).** `michielvha/docker-release-action@main`
-   builds **and** pushes in a single step (`build-release.yml:75-84`), and whether it exposes a
+   builds **and** pushes in a single step (`build-release.yml:74-83`), and whether it exposes a
    pre-push hook is `[unverified]`. Phase 5 works around this by doing its own `buildx --load`
    build first and relying on the buildx cache to make the subsequent push cheap.
    *Recommendation: accept the workaround for this change; if the double build proves slow, add a
