@@ -46,11 +46,29 @@ strictly better state than before it. `/plan` phases from these groups.
 This repo is a `go-cli-tool` in Go (`vega.yaml`) with exactly one direct dependency,
 `gopkg.in/yaml.v3` (`go.mod:4`). Nothing in this spec requires a second one (NF-06).
 
-**The four false-pass classes being closed**
+**G5 was found while planning this spec, and it is a regression.** Before the skip guard shipped
+(`builder.go`, PR #8), deleting a base made the run go **red** — for the wrong reason, a bogus
+build failure on the removed path, but the breakage was at least surfaced. Now the removed path is
+correctly skipped and nothing else is marked affected, so the run goes **green** while
+`kustomize build` on the surviving overlay genuinely fails. Session-verified on `main`:
+
+```
+ground truth:  kustomize build overlays/dev   -> BROKEN
+tool reports:  1 total, 0 successful, 0 failed, 1 skipped
+               "All builds successful"        -> exit 0
+```
+
+That fix was still correct in isolation; it simply exposed that impact analysis was relying on a
+bogus failure to catch this case. Group A closes it for the right reason, because once the
+containment guard is gone the deleted `base/deployment.yaml` matches `overlays/dev`'s `../../base`
+reference directly. This raises the priority of Phase A rather than changing its content.
+
+**The false-pass classes being closed**
 
 | ID | Class | Where it lives today | Phase |
 |----|-------|----------------------|-------|
 | G1 | A cross-directory resource reference (`../shared/cm.yaml`) never marks its kustomization affected | `analyzer.go:115-120` containment guard returns `false` before the `resources` loop at `:122-131` | A |
+| G5 | Deleting a base outright leaves every overlay that consumes it unvalidated, and the run exits **0** | Same containment guard. The deleted `base/…` paths never match `overlays/dev`'s `../../base` reference, so only `base` itself is affected — and it is correctly *skipped*, leaving nothing to fail | A |
 | G4 | A directory reference whose name contains a dot loses its graph edge | `graph.go:100-108` uses `filepath.Ext(resource) != ""` to tell files from directories | B |
 | G3 | An unparseable kustomization is warned to stderr and silently dropped | `discovery.go:51-56`; the run can still exit 0 | C |
 | G2 | `patches`, `configMapGenerator`, `secretGenerator` (and more) are never parsed | `discovery.go:76-80` parses only `resources`, `bases`, `components` | D |

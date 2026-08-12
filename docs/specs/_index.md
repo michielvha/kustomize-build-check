@@ -32,9 +32,18 @@ decides which way it falls.
 
 ## Active work
 
-| Spec | Status | Description |
-|------|--------|-------------|
-| [complete-impact-matching](./complete-impact-matching.spec.md) | Draft | Closes every false-pass surface in impact matching: cross-directory resource references, the unparsed reference fields (`patches`, `configMapGenerator`, `secretGenerator`, `helmCharts` and friends), unparseable kustomizations being silently dropped, and the `filepath.Ext` heuristic losing graph edges. Written to be delivered in phases. |
+Everything known to be coming is spec'd before implementation starts, so the whole surface is
+visible up front rather than discovered mid-build.
+
+| Spec | Status | Plan | Description |
+|------|--------|------|-------------|
+| [complete-impact-matching](./complete-impact-matching.spec.md) | Draft | [plan](../../plans/complete-impact-matching.md) | Closes every false-pass surface in impact matching: cross-directory resource references, the unparsed reference fields (`patches`, `configMapGenerator`, `secretGenerator`, `helmCharts` and friends), unparseable kustomizations being silently dropped, and the `filepath.Ext` heuristic losing graph edges. Delivered in four phases. |
+| [shallow-clone-support](./shallow-clone-support.spec.md) | Draft | — | The action hard-fails with a raw `fatal: bad object` when the base ref is not reachable locally, which is what `actions/checkout`'s default `fetch-depth: 1` produces. Detects the case, explains it, and degrades to validating everything rather than concluding "nothing changed". |
+| [container-hardening](./container-hardening.spec.md) | Draft | — | Moves the image off `alpine:3.23` to a Wolfi base to cut CVE surface, with behaviour parity as a hard requirement. Full distroless was considered and rejected: it needs go-git, costing 48 extra modules and a behaviour change. |
+
+**Sequencing.** `complete-impact-matching` first — it is the only one fixing active false passes.
+Then `shallow-clone-support`, then `container-hardening` (no behaviour change, so it is safest
+last, and it wants the smoke-test harness built against the current image first).
 
 ## Known gaps recorded by these specs
 
@@ -45,6 +54,7 @@ false-pass rows are now owned by
 | Gap | Spec | Effect |
 |-----|------|--------|
 | Cross-directory resource files are not matched | [impact-analysis](./impact-analysis.spec.md) | A kustomization referencing `../shared/cm.yaml` is not marked affected when that file changes. Verified: the run reports "No kustomizations affected". **False pass.** |
+| Deleting a base leaves its overlays unvalidated | [complete-impact-matching](./complete-impact-matching.spec.md) §1 (G5) | Same root cause. The base is correctly skipped, nothing else is marked affected, and the run exits 0 while `kustomize build` on the surviving overlay fails. A regression introduced by the skip guard in #8, which previously caught this by accident. **False pass.** |
 | `patches` / `configMapGenerator` / `secretGenerator` / `helmCharts` are not parsed | [kustomization-discovery](./kustomization-discovery.spec.md) | A file referenced only through those fields never marks anything affected. Verified: `helmCharts[].valuesFile` changes rendered output and its deletion breaks the build, so it is a real surface too. **False pass.** |
 | Unparseable kustomization YAML is warned and skipped | [kustomization-discovery](./kustomization-discovery.spec.md) | It is excluded from the graph, so nothing depending on it is validated. **False pass.** |
 | Dotted directory names lose graph edges | [kustomization-discovery](./kustomization-discovery.spec.md) | `filepath.Ext("../bases/v1.2")` is `".2"`, so the reference is treated as a file and the base→overlay edge is dropped. **False pass.** |
