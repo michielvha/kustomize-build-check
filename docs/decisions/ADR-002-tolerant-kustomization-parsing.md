@@ -38,7 +38,7 @@ kustomize API import.
 **Stage 1 — document shape only.** Unmarshal into a struct whose every field is a
 `yaml.Node`. This succeeds for any well-formed YAML mapping regardless of what the values
 look like, and it stays non-strict, so unknown fields are still ignored (F-C5). Only
-genuinely malformed YAML fails here, and that failure is the one and only condition that
+genuinely malformed YAML fails at this stage. **Corrected 2026-08-12:** an earlier wording called this "the one and only condition" for `Unparsed`, which was wrong twice over — a **read** error (`os.ReadFile`, `discovery.go:71-74`) never reaches this stage at all and must also set `Unparsed`, and a stage-2 `FieldError` must likewise mark the directory always-affected, because in both cases the tool does not know what the file references. Malformed YAML is one condition of three, not the only one. The original sentence read: that failure is the condition that
 marks a file `Unparsed`.
 
 ```go

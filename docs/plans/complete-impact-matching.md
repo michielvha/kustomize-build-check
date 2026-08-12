@@ -314,6 +314,19 @@ added by this plan.
       `SkipReason` and `Failed == 0` for that path (F-C4, F-E3).
 - [ ] AC-C6: An unparseable kustomization still produces a graph **node** at its directory, so a
       kustomization that references it keeps its edge and its dependents still propagate (F-C2a).
+- [ ] AC-C8 (F-C1, plan-added): A kustomization file that cannot be **read** — a dangling
+      symlink, or one whose mode denies reading — is flagged `Unparsed`, reaches `kustomize build`
+      and fails the run. E2E, `internal/integration/pipeline_test.go` —
+      `TestUnreadableKustomizationIsBuiltNotDropped`.
+      *F-C1 says "read or parsed". The read error happens at `discovery.go:71-74`, before the YAML
+      stage, so covering only malformed YAML leaves it silently dropped.*
+- [ ] AC-C9 (F-C6/AC-C4, plan-added): A kustomization with an undecodable **field** (e.g.
+      `patches:` given as plain strings) is retained, records a `FieldError`, **and its directory
+      reaches `kustomize build`** — so a change to a sibling file it would have referenced cannot
+      pass silently. E2E, `internal/integration/pipeline_test.go` —
+      `TestFieldErrorStillReachesTheBuilder`.
+      *Without this, AC-C4's "the directory reaches `kustomize build`" is satisfiable only by
+      arranging for the directory to be affected some other way.*
 - [ ] AC-A9 (plan-added, Phase 5 release gate): After the last phase merges, the image tagged
       with the merge SHA is confirmed **present in GHCR before** any pin edit; then
       `kustomize-build-check-action/action.yml`'s `image:` pin is bumped to that SHA and one real
@@ -475,8 +488,11 @@ through the report.
 **Tasks**:
 - [ ] Implement the two-stage `yaml.Node` decode per
       [ADR-002](../decisions/ADR-002-tolerant-kustomization-parsing.md), initially over the
-      three existing fields only. Stage 1 failure (malformed YAML) is the sole `Unparsed`
-      condition; stage 2 failure records a `FieldError` and yields no references from that field.
+      three existing fields only. Stage 1 failure (malformed YAML) sets `Unparsed`; stage 2
+      failure records a `FieldError` and yields no references from that field.
+      **Both are always-affected triggers — see the Phase 3 always-affected task below. A
+      `FieldError` means the tool does not know what that field referenced, which is the same
+      epistemic position as `Unparsed` and must not be treated as "no references".**
 - [ ] Extend `discovery.KustomizeFile` additively: `Unparsed`, `ParseErr`, `FieldErrs`, and the
       `Ref` / `FieldError` types. Keep `Resources`, `Bases`, `Components` exactly as they are so
       `graph.Build` is untouched by this phase (NF-08).
@@ -485,15 +501,34 @@ through the report.
 - [ ] Change `FindAll` (`discovery.go:51-56`) to append the flagged entry instead of dropping it,
       and **delete** the `fmt.Fprintf(os.Stderr, "Warning: ...")` line (F-C1, F-C2a, NF-05).
       Verify the `fmt`/`os` imports are still needed.
+- [ ] **`Unparsed` MUST also be set when the file cannot be READ, not only when the YAML is
+      malformed.** `ParseKustomization` fails at `os.ReadFile` (`discovery.go:71-74`) *before* the
+      YAML stage, so a dangling symlink or an unreadable file never reaches stage 1. F-C1 says
+      "cannot be **read or** parsed"; covering only malformed YAML leaves the read case silently
+      dropped — and deleting the stderr warning above turns today's *noisy* false pass into a
+      *silent* one. Verified on `main`: `app/kustomization.yaml` as a dangling symlink with a
+      sibling file edited reports "No kustomizations affected by changes" and exit 0, while
+      `kustomize build app` fails.
 - [ ] Apply the always-affected rule in `analyzer.GetAffectedKustomizations` per
-      [ADR-003](../decisions/ADR-003-surfacing-parse-failures.md): `kust.Unparsed` adds
-      `kust.Dir` unconditionally, **without** dependent propagation. Signature unchanged (F-E6).
+      [ADR-003](../decisions/ADR-003-surfacing-parse-failures.md): `kust.Unparsed` **or a
+      non-empty `kust.FieldErrs`** adds `kust.Dir` unconditionally, **without** dependent
+      propagation. Signature unchanged (F-E6).
+      *`FieldErrs` must trigger it too, or AC-C4 is unsatisfiable as written: it asserts the
+      directory "reaches `kustomize build`", but a `patches` field given as plain strings yields a
+      `FieldError`, contributes no references, and — without this — nothing puts the directory
+      back in the set. Verified on `main`: that fixture reports "No kustomizations affected" while
+      `kustomize build` rejects it with `cannot unmarshal string into ... types.Patch`.*
 - [ ] Add `reporter.ParseIssue`, `PrintParseIssues` and `AppendParseIssuesToStepSummary`
       (additive; existing method signatures and the outputs contract untouched — AC-C7).
 - [ ] Wire `cmd/action/main.go`: collect `Unparsed` + `FieldErrs` from the discovered set into
       `[]reporter.ParseIssue`, print them, append them to the step summary. Ensure the
       "No kustomizations affected" early-exit branch (`main.go:63-76`) also reports them.
-- [ ] Extend the E2E harness `run()` (`pipeline_test.go:113-140`) to point
+- [ ] **This plan OWNS the final shape of the shared `run()` helper.** Three plans reshape it
+      (`shallow-clone-support` swaps `reporter.New()` for the `RunInfo` constructor at
+      `pipeline_test.go:139`; `build-timeout-handling` adds a `runWith(...)` variant). This plan
+      lands first, so the signature it settles is the one the other two build on — extend it once,
+      here, and record the resulting signature in this task list so neither later plan invents a
+      second shape. Extend the E2E harness `run()` (`pipeline_test.go:113-140`) to point
       `GITHUB_STEP_SUMMARY` at a temp file and invoke the reporter, returning its contents
       alongside the summary, so AC-C2 is assertable end to end.
 - [ ] Add discovery unit tests: AC-C3 (unknown fields ignored, not `Unparsed`), AC-C4

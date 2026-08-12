@@ -130,10 +130,22 @@ false-pass classes**, and it caught a defect round 1's own fix had missed.
   assertion — with the caveat that after it the assertion is tautological, so the paired
   edge-asserting test carries all the signal and its fixture must not be vacuous.
 
-### Outstanding — not yet applied
+### Round 3 — closing the gap between "recorded" and "applied"
 
-These are recorded rather than fixed, because they are spec amendments or lower-severity items and
-none blocks `complete-impact-matching` Phase 1.
+Everything in the round-2 punch list below has now been **applied**, not just recorded. Re-checking
+my own work against the review also surfaced **two blocking adversarial findings I had skipped**,
+both verified on `main` before fixing:
+
+| # | Finding | Severity |
+|---|---|---|
+| R3-1 | **An *unreadable* kustomization is a silent false pass, and Phase 3 was going to make it worse.** F-C1 says "cannot be **read or** parsed", but the read error happens at `discovery.go:71-74`, *before* the YAML stage, so nothing set `Unparsed` for it. Phase 3 deletes the stderr warning, turning today's *noisy* false pass into a *silent* one. Verified: a dangling-symlink `kustomization.yaml` with a sibling file edited reports "No kustomizations affected", exit 0, while `kustomize build` fails. Fixed, with AC-C8. | **Blocking** |
+| R3-2 | **`FieldErrs` made AC-C4 unsatisfiable as written.** A field the tool cannot decode silently removed that directory's whole reference surface, and only `Unparsed` triggered the always-affected rule. AC-C4 asserts the directory "reaches `kustomize build`"; nothing put it back. A `FieldError` is the same epistemic position as `Unparsed` — the tool does not know what the field referenced — so it now triggers the rule too. Fixed, with AC-C9. ADR-002's "one and only condition" sentence, which made both gaps look deliberate, is corrected. | **Blocking** |
+| R3-3 | **Nobody owned the shared `run()` helper.** Three plans reshape it and none was responsible for the final signature. `complete-impact-matching` lands first, so it now owns it explicitly and records the resulting shape. | Medium |
+
+The lesson repeats: R3-1 is *again* a locally-correct change (route diagnostics through the
+reporter) removing the accident that was catching something.
+
+### Round-2 punch list — all now applied
 
 **Spec amendments needed** (the plans are right, the specs are wrong):
 
