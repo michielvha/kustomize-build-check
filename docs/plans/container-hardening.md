@@ -543,7 +543,7 @@ on both arches, with the scanner name and version pinned.
 - [ ] Run it, download the artifacts, and paste the **before** table into the PR body under a
       heading that Phase 4 will complete. Record the date; the after-scan must be the same day
       (AC-7).
-- [ ] Record the same numbers in `summaries/container-hardening.md` when `/implement` writes its
+- [ ] Record the same numbers in `docs/summaries/container-hardening.md` when `/implement` writes its
       summary, so the measurement outlives the PR's artifact retention.
 
 **Depends on**: Phase 1.

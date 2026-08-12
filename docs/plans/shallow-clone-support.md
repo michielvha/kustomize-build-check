@@ -189,11 +189,39 @@ more entries, and this plan's full-scan set grows to match.
 
 Three consequences, all of which this plan absorbs deliberately:
 
-1. **The superset property (NF-01) is strengthened, not weakened.** Full-scan ⊇ any
-   diff-derived set holds under both versions of `FindAll`, because impact analysis — including
-   that plan's always-affected rule for `Unparsed` entries
-   ([ADR-003](../decisions/ADR-003-surfacing-parse-failures.md)) — only ever selects *from* the
-   discovered set. Growing the discovered set grows both sides.
+1. **The superset property (NF-01) is strengthened with respect to `FindAll`'s growth — but it
+   is NOT unconditionally true today, and Phase 3 MUST NOT ship until it is.**
+
+   The reasoning that impact analysis "only ever selects *from* the discovered set" is **false**
+   for one branch. `analyzer.go:51-58` adds `filepath.Dir(absFile)` for any changed file whose
+   basename is a kustomization file, **without consulting the discovered set at all**. Meanwhile
+   `discovery.go:44-47` skips *every* dot-prefixed directory. So a kustomization under `.deploy/`
+   is validated in `diff` mode and is **invisible** to `full-scan`. Verified:
+
+   ```
+   fixture:  .deploy/kustomization.yaml (broken by the change) + app/ (fine)
+   diff mode (today):  ❌ .deploy - Build failed   -> 1 failed, exit 1
+   full-scan:          candidates = [app]          -> 1 success, 0 failed, exit 0
+   ```
+
+   On the same commit pair, `diff` exits 1 and `full-scan` exits 0 on a repo where
+   `kustomize build` fails. Since today's shallow run *crashes* (exit 1), Phase 3 would turn a
+   red run **green** — a new false pass, in the plan whose whole premise is that degrading is
+   safe.
+
+   **Required fix, and it belongs in discovery, not the analyzer.** Narrow
+   `discovery.go:44-47` to skip `.git` (and any other genuinely non-manifest directory named
+   explicitly) rather than all dot-prefixed directories, so both stages share one universe.
+   Do **not** "fix" this by restricting the analyzer's basename branch to the discovered set:
+   that would *narrow* `diff` mode and destroy a real detection.
+
+   > **AC-P13 (plan-added, blocks Phase 3):** A kustomization inside a dot-prefixed directory
+   > (e.g. `.deploy/`) is discovered by `FindAll` and appears in the `full-scan` candidate set.
+   > On a commit pair where that kustomization is broken, `full-scan` and `diff` produce the
+   > same non-zero exit. E2E, `internal/integration/pipeline_test.go`.
+
+   Note also that **AC-12 as currently written passes vacuously**: its fixture contains no
+   dot-directory kustomization, so it cannot detect this. Its fixture must include one.
 2. **It changes an assertion shape, and AC-2 is written for it.** A naive "success-count equals
    the number of discovered kustomizations" would break the moment a fixture contains a
    malformed `kustomization.yaml`, because that directory is now discovered, now built, and
@@ -687,8 +715,13 @@ Organised into three work packages, each its own commit, so rollback stays granu
       `full-scan`, a short block naming `RunInfo.BaseRef` and `RunInfo.Reason`, placed
       immediately after the metrics table and **before** `### ❌ Build Errors`.
 - [ ] Unset `Mode` ⇒ `full-scan` + `slog.Error`, with a unit test asserting it (the loud side).
-- [ ] Update **all three** `reporter.New` call sites: `main.go:66` (the zero-affected early
-      return — F-21 requires the mode there too), `main.go:89`, and `pipeline_test.go:139`.
+- [ ] Update **all six** `reporter.New` call sites: `main.go:66` (the zero-affected early
+      return — F-21 requires the mode there too), `main.go:89`,
+      `internal/integration/pipeline_test.go:139`, and — easy to miss, and **compile-breaking**
+      if missed — `internal/reporter/reporter_test.go:24`, `:46`, `:69`. The last three are in
+      the reporter's own test package, which will not compile against a changed constructor.
+      Both `complete-impact-matching` Phase 3 and `build-timeout-handling` Phase 2 add tests to
+      that same file, so expect to rebase them onto the new constructor.
 - [ ] Console (F-23): in `full-scan` mode, replace `Found %d changed files` with a line naming
       the count of kustomizations that will be validated and why. `Found 0 changed files` on a
       degraded run would be actively misleading.
@@ -939,11 +972,11 @@ the entire feature lie (F-01).
 3. **complete-impact-matching's AC-C7 needs re-reading after this plan lands. (New, cross-plan.
    Owner: repo owner / reviewer.)** That criterion says `SetGitHubOutputs` "emits exactly the
    same four keys with the same shapes as before the phase". After this plan's Phase 3 there are
-   **five**. The intent is satisfied — the four existing keys keep their names, meanings and
-   emission order (NF-07) — but the literal wording fails if that plan is reviewed after this
-   one lands. *Recommendation: amend AC-C7 to "the four existing keys keep their names, shapes
-   and emission order" when the plans are next touched.* See
-   [C-2](#collisions-with-other-plans). **Escalated.**
+   **five**. **RESOLVED — no longer escalated.** AC-C7 was amended on 2026-08-12 to assert
+   additivity ("this phase adds no key ... not that they are the only keys"), so the literal
+   four-key reading no longer exists. The identical defect was then found and fixed in
+   `build-timeout-handling` AC-21. See
+   [plan-review.md](../summaries/plan-review.md). No action remains here.
 
 4. **OQ-2 — should the binary implement the auto-detected PR base it already advertises? (spec
    §10, owner: repo owner.)** Both `action.yml` files promise auto-detection the binary does not
@@ -984,12 +1017,15 @@ the entire feature lie (F-01).
    unchanged; only the numbers and the file names moved. Links in this plan point at where each
    file **actually is right now**.
 
-   *Recommendation: pick one taxonomy and move everything to it in a single commit before any
-   `/implement` run starts, then fix the cross-links in all four plans at once. `plans/` +
-   `decisions/` is the layout `CLAUDE.md` and the three newest plans assume, so moving the
-   `docs/` copies back is the smaller change. Also re-create the plan index and give ADR-007 to
-   whichever plan skipped it.* **Escalated — a reviewer running `/review` against any of the four
-   plans will hit broken links until this is settled.**
+   **RESOLVED on 2026-08-12 — do NOT act on the recommendation this item used to carry.** The
+   repo owner settled it: **all SDD artifacts live under `docs/`**. `plans/` and `decisions/`
+   were moved to `docs/plans/` and `docs/decisions/`, every relative link was rewritten for the
+   new depth and verified to resolve, and `CLAUDE.md`'s reviewer write scope plus
+   `build-release.yml`'s `paths-ignore` follow the move.
+
+   The superseded recommendation said to move the `docs/` copies **back** to root. Acting on it
+   now would break the constitution's stated write scope and the release trigger. The ADR
+   numbering gap (004–007) is cosmetic and deliberate; no ADR references a missing sibling.
 
 8. **Release-note wording for the exit-code change. (Owner: repo owner, blocking Phase 4's
    release notes only.)** A consumer whose workflow currently goes red on every shallow-clone

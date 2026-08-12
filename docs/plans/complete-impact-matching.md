@@ -639,8 +639,23 @@ has its `image:` pin bumped to that SHA, no consumer sees any of this work** —
 digest, so `@main` keeps serving the old image. This exact step was needed manually after PR #8.
 
 Verify the new tag exists in GHCR *before* bumping the pin, rather than assuming the workflow
-succeeded. If several plans land close together, bump the pin **once** after the last one, which is
-what `shallow-clone-support`, `build-timeout-handling` and `container-hardening` also assume.
+succeeded.
+
+**Bump per plan, not once at the end.** An earlier draft of this paragraph said to bump once after
+the last plan and claimed the other three plans assume the same. That was wrong, and the review
+caught it:
+
+- `shallow-clone-support` argues the opposite — serialising the bumps keeps each one attributable
+  — and its Phase 4 rollback requires the pin bump and the wrapper's input declarations to be **one
+  commit**, which a deferred bump makes impossible.
+- `build-timeout-handling` bumps after its own Phase 4.
+- `container-hardening` AC-13 requires the bumped pin to produce **identical counts and exit code**
+  versus the run immediately before it. That assertion only holds if the pin was already current
+  when it starts — this plan deliberately changes counts (G5 and the wider matching), so folding
+  several plans into one bump guarantees AC-13 fails.
+
+Deferring the bump would also create the stack's only forward dependency: this plan's Phase 5 could
+not complete until plan 4 landed. So: **each plan bumps the pin after its own last phase.**
 
 **Ordering confirmed, with one qualification.** The spec's A → B → C → D order is right and is
 adopted:
@@ -687,15 +702,49 @@ adopted:
    answer is parallel builds (already a v2 idea, `design.md:580`), not a smaller affected set.
    Does not gate any phase.
 
-2. **OQ-6 (new, raised by this plan, non-blocking).** A base deleted so completely that its
-   directory contained nothing but `kustomization.yaml` propagates nothing to its dependents,
-   because discovery walks the post-change tree and the node no longer exists. Neither ADR-001's
-   chosen option nor the stat-based alternatives fix this — see
-   [ADR-001](../decisions/ADR-001-graph-reference-classification.md) finding 1. The complete fix
-   is to build the graph from the pre-change tree, which is out of scope (§9 addition 12).
-   Phase 1 covers every case where the deleted base held at least one other file, which is the
-   overwhelming majority. *Recommendation: record as a known gap in `docs/specs/_index.md` after
-   this plan lands, and spec it separately if it is ever observed.*
+2. **OQ-6 — RESOLVED AND PROMOTED INTO PHASE 2. It was wrongly classified as non-blocking, and
+   the justification for deferring it was factually wrong.**
+
+   The case: a base deleted so completely that its directory contained nothing but
+   `kustomization.yaml` propagates nothing to its dependents. **This is a reproducible false
+   pass of exactly the G5 shape**, verified on `main`:
+
+   ```
+   fixture:       overlays/dev references ../../base; base/ holds ONLY kustomization.yaml
+   changed files: base/kustomization.yaml          <- the only one, so Phase 1 has nothing to match
+   ground truth:  kustomize build overlays/dev     -> BROKEN
+   tool reports:  1 total, 0 failed, 1 skipped     -> "All builds successful", exit 0
+   ```
+
+   Phase 1 does **not** close it. Phase 1 widens matching over changed files *under* the deleted
+   directory, and here there are none — the only changed path is the kustomization file itself.
+
+   **The stated reason for deferring was wrong.** This plan previously claimed "the complete fix
+   is to build the graph from the pre-change tree, which is out of scope", citing
+   [ADR-001](../decisions/ADR-001-graph-reference-classification.md) finding 1. That is not so:
+   `graph.go:74-84` records the reverse edge **only when a node was discovered at the resolved
+   path**, which is precisely the case a deleted base fails. Moving the `reverseLookup` append
+   outside the `if exists` guard closes it in about three lines, with the whole suite green:
+
+   ```
+   ⏭️  base          - Skipped (removed in this change)
+   ❌ overlays/dev  - Build failed
+   Summary: 2 total, 0 successful, 1 failed, 1 skipped   -> exit 1
+   Go test: 31 passed in 8 packages
+   ```
+
+   Over-matching risk is nil: `addAffected` is only ever called with a kustomization directory, so
+   the extra reverse-lookup keys (e.g. `<dir>/deployment.yaml`) are unreachable.
+
+   **Shipping a reproducible false pass behind a non-blocking open question is not permitted by
+   `CLAUDE.md`** when the fix is three lines and provably green. Fold into Phase 2 (it is a graph
+   change and belongs with the other one), with its own acceptance criterion:
+
+   > **AC-B7 (plan-added, closes OQ-6):** A base whose directory contained only
+   > `kustomization.yaml`, deleted by the change while a surviving overlay still references it,
+   > marks that overlay affected. The overlay is reported **failed** and the removed base
+   > **skipped**; the run exits non-zero. E2E, `internal/integration/pipeline_test.go` —
+   > `TestDeletedBareBaseFailsDependentOverlay`.
 
 3. **F-D8 / OQ-3 override (owner: repo owner, non-blocking).** This plan resolves OQ-3 by
    shipping `crds`, `configurations` and `openapi.path` in work package 4.3. If the repo owner

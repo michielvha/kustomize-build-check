@@ -103,7 +103,7 @@ today, on any `--enable-helm` run whose chart fetch stalls.
 | `docs/specs/build-execution.spec.md` | Committed; **will be wrong after this ships** | Baseline for `internal/builder`. F-17/F-18/F-19/F-20/F-23 and NF-04 are superseded; amend per spec §11 |
 | `docs/specs/result-reporting.spec.md` | Committed; **will be wrong after this ships** | Counting rules F-02/F-03 and the public output contract F-19/NF-02 are load-bearing and must not move; §3.1, F-22, F-23, §5.1, §6.2 need amending |
 | `plans/complete-impact-matching.md` | Planned, not started, **ships first** | Touches `internal/reporter` and `internal/integration/pipeline_test.go`. See [Collisions](#collisions-with-other-plans) |
-| `shallow-clone-support` plan | Not yet written, **ships second** | Adds an input to both `action.yml` files, a `getEnv` call in `main.go`, and widens two reporter signatures. See [Collisions](#collisions-with-other-plans) |
+| `shallow-clone-support` plan | Not yet written, **ships second** | Adds an input to both `action.yml` files and a `getEnv` call in `main.go`. It does **not** widen any reporter signature — ADR-011 chose constructor injection; see Collisions B. See [Collisions](#collisions-with-other-plans) |
 | `container-hardening` plan | Not yet written, ships fourth | Dockerfile only. No overlap |
 | OQ-1 (whole-run budget) | Deferred in spec §10 | Non-blocking. Interacts with plan 1's build-count increase — see [Open Questions](#open-questions) |
 | OQ-2 (`timed-out-count` output) | **Decided no for v1** (F-23) | This plan does not reopen it. Adding an output later is compatible; removing one is not |
@@ -492,9 +492,13 @@ plan.
       `/Users/michielvh/code/personal/kustomize-build-check-action/action.yml`.
 - [ ] AC-20 (F-20, new): The wrapper README's Inputs table (`kustomize-build-check-action/README.md:69-72`)
       lists `build-timeout` with its default, in the same release.
-- [ ] AC-21 (NF-03, new): Both `action.yml` files still declare exactly the four existing outputs
+- [ ] AC-21 (NF-03, new): Both `action.yml` files still declare the four pre-existing outputs
       (`results`, `failed-count`, `success-count`, `skipped-count`) with unchanged names and
-      descriptions. No output is added by this plan.
+      descriptions, and **this plan adds none of its own**.
+      *Assert presence and shape, NOT that they are the only outputs.* `shallow-clone-support`
+      lands `change-detection-mode` before this plan, so a literal four-output assertion would
+      fail here for a reason unrelated to timeouts. Same defect class as
+      `complete-impact-matching` AC-C7; see [plan-review.md](../summaries/plan-review.md).
 
 **Cross-cutting (verified at the end of every phase)**
 
@@ -641,7 +645,8 @@ its verdict and every published count stay exactly as they are today.
 - [ ] Run `go test ./...`; confirm the invariant checklist (AC-E1..AC-E5).
 
 **Depends on**: Phase 1 (`BuildResult.TimedOut` / `TimeoutLimit` must exist). Should land **after**
-plan 2's reporter signature widening if that plan is in flight — see
+plan 2, to avoid rebasing the `reporter.New()` call sites. Note plan 2 changes the **constructor**,
+not the method signatures — the earlier "signature widening" framing was superseded by ADR-011; see
 [Collisions](#collisions-with-other-plans) B.
 
 **Rollback**: exactly one commit — `git revert <phase-2-sha>` restores the two-arm console switch,
