@@ -17,7 +17,7 @@ RUN apk update && \
     update-ca-certificates 2>/dev/null || true
 
 # Install kustomize
-ARG KUSTOMIZE_VERSION=v5.3.0
+ARG KUSTOMIZE_VERSION=v5.8.1
 RUN wget -O /tmp/kustomize.tar.gz \
     "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_${TARGETARCH}.tar.gz" && \
     tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin && \
@@ -25,7 +25,7 @@ RUN wget -O /tmp/kustomize.tar.gz \
     chmod +x /usr/local/bin/kustomize
 
 # Install helm (needed for --enable-helm flag)
-ARG HELM_VERSION=v3.16.2
+ARG HELM_VERSION=v4.2.3
 RUN wget -O /tmp/helm.tar.gz \
     "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" && \
     tar -xzf /tmp/helm.tar.gz -C /tmp && \

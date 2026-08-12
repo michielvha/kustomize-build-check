@@ -116,7 +116,8 @@ directory would fail.
 | ID | Priority | Requirement | Baseline being changed |
 |----|----------|-------------|------------------------|
 | F-C1 | P0 | A kustomization file that cannot be read or parsed MUST NOT be able to produce a green check. Silently excluding it from `allKustomizations` while the process exits 0 is forbidden. | `discovery.go:51-56` prints `Warning: failed to parse …` to stderr and `return nil`s, continuing the walk; the file is absent from the graph and the exit code is unaffected ([kustomization-discovery.spec.md](./kustomization-discovery.spec.md) F-05, F-07). |
-| F-C2 | P0 | The specific outcome — hard failure, failure only when the file is in the changed set, or a distinct third "unvalidatable" outcome alongside success/failure/skipped — is **not decided by this spec**. It is OQ-1 and MUST be answered by the developer at the plan gate before Phase 3 is implemented. Whichever option is chosen MUST satisfy F-C1. | New. |
+| F-C2 | P0 | **Decided (OQ-1, option (d), see §10).** A kustomization this tool cannot parse MUST be treated as **always affected**: its directory is added to the build set unconditionally, regardless of whether the diff touched it, and `kustomize build` adjudicates the outcome. If kustomize builds it, the run is green; if kustomize fails, the run fails with kustomize's own error. There is no parse-only failure and no new result class. | New. Supersedes the "warn to stderr and drop" behaviour at `discovery.go:51-56`. |
+| F-C2a | P0 | An unparseable kustomization MUST still produce a graph **node** at its directory, so that kustomizations which reference it (and which parse fine) keep their edges to it and their dependents still propagate. Only its **outgoing** references are unknown, which is precisely why F-C2 marks it affected unconditionally. | New. Today the file is absent from `allKustomizations`, so no node exists at all (`discovery.go:51-56`). |
 | F-C3 | P0 | Whatever outcome is chosen, the unparseable path and the parse error MUST be surfaced to the user through the normal reporting channels (console line, step summary, action outputs), not only as a bare stderr `Warning:` line that CI logs bury. | `discovery.go:54` writes to stderr directly, bypassing `internal/reporter` entirely. |
 | F-C4 | P0 | The chosen outcome MUST NOT reclassify a directory the change legitimately **removed** as a failure. [build-execution.spec.md](./build-execution.spec.md) F-05/F-06 skip semantics are unchanged: a removed path is *skipped*, never *failed*. | `builder.go:127-143`. |
 | F-C5 | P1 | Parse tolerance and parse failure MUST be distinguished. Unknown *fields* MUST continue to be ignored without error (non-strict unmarshalling), so that a kustomize feature this tool does not model never fails a build. Only genuinely malformed YAML, or a malformed value in a field this tool **does** parse, counts as a parse failure. | `discovery.go:82` is already non-strict ([kustomization-discovery.spec.md](./kustomization-discovery.spec.md) F-09); F-C5 keeps it that way as Group D adds fields. |
@@ -127,9 +128,10 @@ directory would fail.
 *Closes:* a file referenced only through `patches`, a generator, or a Helm values file never
 marks anything affected. This is the largest phase.
 
-All field shapes below were **verified this session by building real kustomizations with the
-local `kustomize v5.8.1`**. The shipped image pins `KUSTOMIZE_VERSION=v5.3.0` (`Dockerfile:20`);
-see NF-07 and OQ-4 — the parser MUST target the **shipped** version.
+All field shapes below were **verified this session by building real kustomizations with
+`kustomize v5.8.1`**, which is now also the version the image ships
+(`KUSTOMIZE_VERSION=v5.8.1`, `Dockerfile:20`, bumped as part of resolving OQ-4). Verified and
+shipped versions are therefore identical; see NF-07.
 
 | ID | Priority | Requirement | Session-verified shape |
 |----|----------|-------------|------------------------|
@@ -172,7 +174,7 @@ be asserted by a test.
 | NF-04 | Portability | All path handling through `path/filepath` and `filepath.Separator`; never a hardcoded `/`. |
 | NF-05 | Observability | Diagnostics go through `log/slog` (`Debug`) and, for anything a user must act on, through `internal/reporter` — not `fmt.Fprintf(os.Stderr, …)` (cf. F-C3 and `discovery.go:54`). |
 | NF-06 | Dependencies | One direct dependency, `gopkg.in/yaml.v3`. `yaml.Node` / a two-stage decode is the intended stdlib-plus-existing-dependency route to F-C6's tolerant per-field parsing; no schema library, no kustomize API import. |
-| NF-07 | Version targeting | The parser targets the kustomize version **shipped in the image**, `v5.3.0` (`Dockerfile:20`). All shapes in Group D were verified against `v5.8.1` locally. This gap is a real risk, not a formality — `chartHome` moved between per-chart and `helmGlobals` across versions (F-D7). Each Group D field MUST be confirmed against v5.3.0 during `/plan` (OQ-4). |
+| NF-07 | Version targeting | **Resolved (OQ-4).** The image now pins kustomize `v5.8.1` and helm `v4.2.3` (`Dockerfile:20,28`), which is exactly the toolchain every Group D shape was verified against. The verification gap is closed: there is no longer a shipped-vs-verified drift to reconcile, and the `chartHome` / `helmGlobals` move (F-D7) is settled on the v5.8.1 side. |
 | NF-08 | Go conventions | Interface-first with unexported structs and `New()` constructors, matching the other stages (`analyzer.go:12-26`, `graph.go:26-40`, `discovery.go:22-33`). Additive changes to `discovery.KustomizeFile` MUST keep existing fields readable by existing consumers or update all of them in the same phase. |
 | NF-09 | CI honesty | `internal/integration` skips when `git` or `kustomize` is missing (`pipeline_test.go:142-148`). `CLAUDE.md` forbids letting these silently skip in CI; every phase MUST confirm the integration tests actually ran. |
 
@@ -269,7 +271,7 @@ GetAffectedKustomizations(changedFiles []string, g graph.Graph, allKustomization
 | Aspect | Contract after this spec |
 |--------|--------------------------|
 | `ParseKustomization` | Reads every surface in F-D1..F-D8, tolerantly (F-C6): an undecodable value in one field yields no references from that field, not a dropped file. |
-| `FindAll` | Behaviour on a parse failure is **decided at the plan gate** (OQ-1 / F-C1). It MUST NOT remain "warn to stderr, drop, exit 0". Whether the signal is an error return, an extra return value, or a field on a result type is an implementation choice; the contract is only that the caller cannot ignore it into a green run. |
+| `FindAll` | On a parse failure it MUST still return an entry for the file, flagged as unparsed and carrying the parse error, with no references learned (F-C2, F-C2a). It MUST NOT remain "warn to stderr, drop, exit 0". Whether the flag is a field on `KustomizeFile` or a separate return value is an implementation choice; the contract is that the caller receives the directory, marks it affected unconditionally, and reports the parse error through `internal/reporter` (F-C3). |
 | `KustomizeFile` | Extended additively per §5. Existing consumers are `graph.Build` (`graph.go:43`) and `analyzer.GetAffectedKustomizations` (`analyzer.go:61`) — both in-repo, both updated in the same phase. |
 
 **`graph.Graph` (`graph.go:26-32`)** — interface unchanged. Only `extractDependencies`
@@ -365,7 +367,7 @@ affected set is exactly the owning directory plus its transitive dependents.
 6. **Parallel builds, discovery caching, result ordering.** v2 ideas (`design.md:580-581`); order remains unspecified (F-E6).
 7. **Validating that a kustomization is semantically correct.** That is `kustomize build`'s job; this spec only decides *which* directories get built.
 8. **Reconciling `design.md`.** It already claims `helmCharts` is parsed (`design.md:185`) while the code parses only three fields (`discovery.go:76-80`). F-D7 makes the claim true; correcting the rest of `design.md` is a separate docs change.
-9. **Upgrading the pinned kustomize version.** `Dockerfile:20` stays at `v5.3.0` under this spec; see OQ-4.
+9. **Further kustomize/helm upgrades.** The pin was moved to v5.8.1 / v4.2.3 as part of resolving OQ-4; keeping it current thereafter is out of scope.
 10. **`docs/specs/_index.md`.** Reconciled centrally, not by this spec.
 
 ### 10. Open Questions
@@ -373,9 +375,41 @@ affected set is exactly the owning directory plus its transitive dependents.
 These MUST be answered at the plan gate. Each is a decision the spec deliberately refuses to
 make silently.
 
-**OQ-1 — Group C: what is the correct outcome for an unparseable kustomization?** *(Blocks Phase C only.)*
-Failing the run is a **behaviour change that could break consuming repos that pass today**, so it is
-not the spec author's call. Options:
+**OQ-1 — RESOLVED. Outcome for an unparseable kustomization.** *(Phase C is unblocked.)*
+
+**Decision: option (d), "validate what you cannot understand".** An unparseable kustomization is
+treated as **always affected** — its directory goes into the build set unconditionally and
+`kustomize build` decides the outcome. A hard fail on parse alone was explicitly rejected by the
+repo owner.
+
+Rationale, and why (d) beats the options originally tabulated:
+
+- **`kustomize build` is the ground truth; this tool's YAML parser is not.** The parser exists only
+  to *guess what to validate*. When it cannot, the honest move is to hand the directory to the
+  authority that actually decides whether the repo is broken. A directory kustomize can build is
+  green even if `yaml.v3` choked on it, so a parser stricter than kustomize can never fail a repo.
+- **It closes G3 rather than narrowing it, unlike (b).** Under (b) a pre-existing unparseable base
+  still hides its dependents. Under (d) the node still exists (F-C2a) so dependents propagate, and
+  the file itself is always built.
+- **It costs far less than (c).** No fourth result class, no new action output, no change to the
+  public output contract, no new user-facing concept to document. It reuses success / failure /
+  skipped exactly as they are.
+- **It is not a hard fail**, so it does not have (a)'s blast radius: a long-broken *unreferenced*
+  kustomization only turns the run red if kustomize itself cannot build it — in which case the
+  repo genuinely is broken and the error is kustomize's own, not a synthetic one.
+- **In practice the two usually coincide.** As recorded in §5, a `patches` entry written as a plain
+  string is rejected by kustomize itself; the file this tool's parser drops is exactly the file
+  `kustomize build` would have failed on. (d) converts that silence into a real, well-messaged
+  failure.
+
+Cost, stated honestly: one extra `kustomize build` per unparseable file. Rare, bounded, and
+strictly the false-fail side of the constitution's asymmetry, which is the correct side to err on.
+
+Residual risk to carry into the plan: `yaml.v3` (non-strict, F-C5) and kustomize's typed unmarshal
+can diverge in *both* directions. (d) makes that divergence harmless by never letting this tool's
+parser be the thing that fails a run.
+
+<details><summary>Original options, retained for the record</summary>
 
 | Option | Behaviour | Pro | Con |
 |--------|-----------|-----|-----|
@@ -383,8 +417,10 @@ not the spec author's call. Options:
 | **(b) Fail only when the file is in the changed set** | Unparseable **and** touched by this change → fail; unparseable and untouched → warn | Proportionate: you broke it, you own it. Non-breaking for pre-existing rot. | A pre-existing unparseable base still silently hides its dependents — G3 is narrowed, not closed. |
 | **(c) Distinct "unvalidatable" outcome** | A fourth result class alongside success/failure/skipped, surfaced in the report and in an action output, with the red/green decision configurable | Closes G3 by making it **visible**; lets consumers opt into strictness on their own schedule | Most work: touches `BuildResult`, `reporter`, `action.yml` outputs, and the exit-code logic. New user-facing concept to document. |
 
-*Recommendation to the developer, not a decision:* (b) or (c) satisfies F-C1 without the blast
-radius of (a). **Owner: repo owner. Deadline: before Phase C is planned.**
+*Original recommendation was (b) or (c); the resolution above supersedes it with (d), which was
+not in this table.*
+
+</details>
 
 **OQ-2 — Group B: what replaces the `filepath.Ext` heuristic, and what happens to paths that do not exist?** *(Blocks Phase B only.)*
 Options: (i) filesystem stat — accurate for what is on disk, but adds I/O to graph construction
@@ -403,12 +439,18 @@ Note that `helmCharts` is **no longer** an unverified question: it was probed th
 so it is a genuine reference surface. `design.md:185` claims helmCharts is parsed; the code does
 not parse it (`discovery.go:76-80`) — the doc is aspirational, the gap is real. **Owner: repo owner.**
 
-**OQ-4 — Which kustomize version do the field shapes come from?** All Group D shapes were verified
-against **v5.8.1** (local). The image ships **v5.3.0** (`Dockerfile:20`). Field shapes do move
-between minors — verified this session: `chartHome` is rejected as a per-chart key in v5.8.1
-(`invalid Kustomization: json: unknown field "chartHome"`) and lives under `helmGlobals` instead.
-Each F-D field MUST be re-confirmed against v5.3.0, or the pin bumped, before Phase 4 is
-implemented. **Risk: medium. Owner: repo owner. Deadline: before Phase 4 is planned.**
+**OQ-4 — RESOLVED. Which kustomize version do the field shapes come from?**
+Resolved by **bumping the pin** rather than by re-verifying against the old one. The image now
+ships kustomize **v5.8.1** (latest release, 2026-02-09) and helm **v4.2.3** (latest, 2026-07-09),
+replacing v5.3.0 and v3.16.2. That is the exact toolchain every Group D shape was verified against,
+so the shipped-vs-verified gap that made this question medium-risk no longer exists.
+
+Verified before bumping, not assumed: both release tarballs resolve (HTTP 200); the helm 4 archive
+keeps the `linux-<arch>/helm` layout the Dockerfile's `mv` depends on; and
+`kustomize build --enable-helm` renders correctly under kustomize v5.8.1 + helm v4.2.3, which is
+the combination the image will ship. The helm **major** bump (3 → 4) is the notable part; it is
+exercised only through kustomize's `--enable-helm`, and that path was tested end-to-end.
+The CI test step pin was moved in lockstep (`.github/workflows/build-release.yml`).
 
 **OQ-5 — Does closing G1 change the build volume enough to matter?** F-E4 bounds matching by real
 references, but a repo with widely shared `../shared/**` files will legitimately build more
@@ -447,10 +489,12 @@ should not be a cap that reintroduces it. **Owner: repo owner. Non-blocking.**
 
 **Dependencies to resolve first**
 
-- **OQ-1 before Phase 3.** Do not implement a hard failure by default.
-- **OQ-2 before Phase 2.**
-- **OQ-4 before Phase 4** — confirm every field shape against the shipped `v5.3.0`, not the local `v5.8.1`.
-- Phases 1 and 2 have no external blockers and can start immediately.
+- **OQ-1 RESOLVED** — Phase 3 is unblocked. Unparseable ⇒ always affected, `kustomize build`
+  adjudicates. No hard failure, no new result class (F-C2, F-C2a).
+- **OQ-2 before Phase 2** — the only remaining blocker.
+- **OQ-4 RESOLVED** — the pin was bumped to the verified toolchain (kustomize `v5.8.1`,
+  helm `v4.2.3`), so shipped and verified versions match. Nothing to re-confirm.
+- Phases 1, 3 and 4 have no external blockers and can start immediately.
 
 **Risk areas**
 
