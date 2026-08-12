@@ -15,11 +15,10 @@ on:
       - 'design.md'
       # SDD artifacts. These change on every spec/plan/review cycle and never
       # affect the binary, so they must not cut a release or push an image.
+      # All of them live under docs/ (specs, plans, decisions, summaries).
       - 'CLAUDE.md'
       - 'vega.yaml'
       - 'docs/**'
-      - 'plans/**'
-      - 'summaries/**'
       - 'TODO.md'
   workflow_dispatch:
 
@@ -46,7 +45,7 @@ jobs:
       # against the same version the released image ships.
       - name: Install kustomize
         env:
-          KUSTOMIZE_VERSION: v5.3.0
+          KUSTOMIZE_VERSION: v5.8.1
         run: |
           curl -sfL -o /tmp/kustomize.tar.gz \
             "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"

@@ -75,7 +75,7 @@ All requirements describe **shipped** behaviour.
 | F-10 | P0 | The command invoked is the bare name `kustomize`, resolved through `PATH`, with argv `["build", (optional) "--enable-helm", <path>]` in that order. | `builder.go:67-71`, `:78` |
 | F-11 | P0 | `--enable-helm` is appended **only** when the `enableHelm` argument is true; it is never passed unconditionally. | `builder.go:68-70` |
 | F-12 | P0 | `enableHelm` is derived in `cmd/action` from `INPUT_ENABLE-HELM`, defaulting to `"true"`, and is true only on the exact string `"true"`. | `cmd/action/main.go:26`; input declared with default `'true'` at `action.yml:15-18` |
-| F-13 | P0 | The released image ships `kustomize v5.3.0` and `helm v3.16.2` on `/usr/local/bin`; helm is installed specifically because `--enable-helm` needs it. | `Dockerfile:20`, `:23-25`, `:27-28`, `:32` |
+| F-13 | P0 | The released image ships `kustomize v5.8.1` and `helm v4.2.3` on `/usr/local/bin`; helm is installed specifically because `--enable-helm` needs it. | `Dockerfile:20`, `:23-25`, `:27-28`, `:32` |
 | F-14 | P0 | stdout and stderr are captured into **separate** in-memory buffers, never streamed to the parent's stdio. | `builder.go:80-82` |
 | F-15 | P0 | On exit 0: `Success=true`, `Skipped=false`, `Output` = captured stdout (the rendered manifests), `Error=""`. | `builder.go:112-118` |
 | F-16 | P0 | On any `cmd.Run()` error: `Success=false`, `Skipped=false`, `Output` = whatever stdout was captured, `Error` = the Go error rendered by `%v`, then a newline, then the full captured stderr. | `builder.go:94-106`, format string `:103` |
@@ -319,9 +319,9 @@ This spec covers `internal/builder` only. Explicitly **not** covered here:
 - Assumed the two `SkipReason` strings are part of the observable contract (they reach users
   via the console line at `reporter.go:72` and the step summary at `reporter.go:193`), so they
   are quoted verbatim in F-05/F-06. [Risk: low]
-- Assumed the tool-version facts (`kustomize v5.3.0`, `helm v3.16.2`) are true **of this
-  repo's image** as pinned in `Dockerfile:20,28`. No claim is made about what is current or
-  latest upstream. [Risk: low]
+- Assumed the tool-version facts (`kustomize v5.8.1`, `helm v4.2.3`) are true **of this
+  repo's image** as pinned in `Dockerfile:20,28`. These were the latest upstream releases when
+  the pin was set (2026-08-12); no claim is made that they stay latest. [Risk: low]
 
 ### 11. Planner Handoff Notes
 

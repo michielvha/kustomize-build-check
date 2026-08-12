@@ -30,16 +30,38 @@ asymmetric.
 Every spec names the false-pass surfaces in its own stage. When an ambiguity arises, that bar
 decides which way it falls.
 
+## Active work
+
+Everything known to be coming is spec'd before implementation starts, so the whole surface is
+visible up front rather than discovered mid-build.
+
+| Spec | Status | Plan | Description |
+|------|--------|------|-------------|
+| [complete-impact-matching](./complete-impact-matching.spec.md) | Draft | [plan](../plans/complete-impact-matching.md) | Closes every false-pass surface in impact matching: cross-directory resource references, the unparsed reference fields (`patches`, `configMapGenerator`, `secretGenerator`, `helmCharts` and friends), unparseable kustomizations being silently dropped, and the `filepath.Ext` heuristic losing graph edges. Delivered in four phases. |
+| [shallow-clone-support](./shallow-clone-support.spec.md) | Draft | [plan](../plans/shallow-clone-support.md) | The action hard-fails with a raw `fatal: bad object` when the base ref is not reachable locally, which is what `actions/checkout`'s default `fetch-depth: 1` produces. Detects the case, explains it, and degrades to validating everything rather than concluding "nothing changed". |
+| [build-timeout-handling](./build-timeout-handling.spec.md) | Draft | [plan](../plans/build-timeout-handling.md) | A timed-out build is currently indistinguishable from a broken kustomization, sending people to debug the wrong thing. Makes the cause machine-readable, adds a `build-timeout` input, and fixes a latent nil-pointer panic in the kill timer. |
+| [container-hardening](./container-hardening.spec.md) | Draft | [plan](../plans/container-hardening.md) | Moves the image off `alpine:3.23` to a Wolfi base to cut CVE surface, with behaviour parity as a hard requirement. Full distroless was considered and rejected: it needs go-git, costing 48 extra modules and a behaviour change. |
+
+**Sequencing.** `complete-impact-matching` first — it is the only one fixing active false passes.
+Then `shallow-clone-support`, then `build-timeout-handling`, then `container-hardening` (no
+behaviour change, so it is safest last, and it wants the smoke-test harness built against the
+current image first).
+
+Every known gap is now spec'd. Nothing is waiting on a decision: the specs are complete enough
+that implementation can start on any of them.
+
 ## Known gaps recorded by these specs
 
-These are documented limitations of shipped behaviour, not unmet requirements. Each is a
-candidate for its own spec before any code changes.
+These are documented limitations of **shipped** behaviour, not unmet requirements. The four
+false-pass rows are now owned by
+[complete-impact-matching](./complete-impact-matching.spec.md); the rest are unclaimed.
 
 | Gap | Spec | Effect |
 |-----|------|--------|
 | Cross-directory resource files are not matched | [impact-analysis](./impact-analysis.spec.md) | A kustomization referencing `../shared/cm.yaml` is not marked affected when that file changes. Verified: the run reports "No kustomizations affected". **False pass.** |
-| `patches` / `configMapGenerator` / `secretGenerator` are not parsed | [kustomization-discovery](./kustomization-discovery.spec.md) | A file referenced only through those fields never marks anything affected. Tracked in [TODO.md](../../TODO.md). **False pass.** |
+| Deleting a base leaves its overlays unvalidated | [complete-impact-matching](./complete-impact-matching.spec.md) §1 (G5) | Same root cause. The base is correctly skipped, nothing else is marked affected, and the run exits 0 while `kustomize build` on the surviving overlay fails. A regression introduced by the skip guard in #8, which previously caught this by accident. **False pass.** |
+| `patches` / `configMapGenerator` / `secretGenerator` / `helmCharts` are not parsed | [kustomization-discovery](./kustomization-discovery.spec.md) | A file referenced only through those fields never marks anything affected. Verified: `helmCharts[].valuesFile` changes rendered output and its deletion breaks the build, so it is a real surface too. **False pass.** |
 | Unparseable kustomization YAML is warned and skipped | [kustomization-discovery](./kustomization-discovery.spec.md) | It is excluded from the graph, so nothing depending on it is validated. **False pass.** |
 | Dotted directory names lose graph edges | [kustomization-discovery](./kustomization-discovery.spec.md) | `filepath.Ext("../bases/v1.2")` is `".2"`, so the reference is treated as a file and the base→overlay edge is dropped. **False pass.** |
-| A timed-out build is indistinguishable from a failed one | [build-execution](./build-execution.spec.md) | Reported identically apart from a WARN log line. |
+| A timed-out build is indistinguishable from a failed one | [build-timeout-handling](./build-timeout-handling.spec.md) | Reported identically apart from a WARN log line, so a slow build reads as a broken manifest. Now spec'd, along with a latent nil-pointer panic: the kill timer is armed before `cmd.Run()` starts the process, so a short timeout dereferences a nil `cmd.Process` in a goroutine with no recover. Unreachable at the current 2 minutes, hit immediately by any timeout test. |
 | `action.yml` documents a `base-ref` default the binary does not implement | [change-detection](./change-detection.spec.md) | Advertised as the PR base sha; the code implements `"" → HEAD~1`. Documentation defect. |
