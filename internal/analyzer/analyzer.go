@@ -59,10 +59,15 @@ func (a *analyzer) GetAffectedKustomizations(
 
 		// Check if the changed file is referenced by any kustomization
 		for _, kust := range allKustomizations {
-			if a.fileReferencedByKustomization(absFile, kust) {
+			if match, ok := a.fileReferencedByKustomization(absFile, kust); ok {
+				// Log the reference that caused the match, not just the fact of
+				// it. Without the raw and resolved forms, an unexpected match is
+				// not diagnosable from the log alone.
 				slog.Debug("Changed file referenced by kustomization",
 					"file", changedFile,
-					"kustomization", kust.Dir)
+					"kustomization", kust.Dir,
+					"reference", match.Raw,
+					"resolved", match.Resolved)
 				a.addAffected(kust.Dir, g, affected)
 			}
 		}
@@ -106,31 +111,49 @@ func (a *analyzer) addAffected(dir string, g graph.Graph, affected map[string]bo
 	}
 }
 
-// fileReferencedByKustomization checks if a file is referenced by a kustomization.
-// changedFile must be an absolute path, to match the absolute Dir recorded by discovery.
-func (a *analyzer) fileReferencedByKustomization(changedFile string, kust discovery.KustomizeFile) bool {
+// referenceMatch describes which reference caused a match, so the caller can
+// report it. Both forms are needed: the raw string is what the author wrote,
+// the resolved path is what it actually points at.
+type referenceMatch struct {
+	Raw      string // the reference exactly as written, e.g. "../shared/cm.yaml"
+	Resolved string // absolute, cleaned, e.g. "/repo/shared/cm.yaml"
+}
+
+// fileReferencedByKustomization reports whether a kustomization references the
+// changed file, and through which reference.
+//
+// changedFile must be an absolute path, to match the absolute Dir recorded by
+// discovery.
+//
+// Matching is decided *solely* by comparing the changed path against each
+// resolved reference. There is deliberately no check that the changed file
+// lives under the kustomization's own directory: a kustomization may legitimately
+// reference a file anywhere in the tree ("../shared/cm.yaml"), and such a
+// containment pre-check was the sole reason those references were never matched
+// — the tool reported green having validated nothing. See G1 and G5 in
+// docs/specs/complete-impact-matching.spec.md.
+//
+// Precision comes from the resolved comparison itself, which is exact or
+// separator-terminated, so a resolved reference of "/repo/shared" never matches
+// "/repo/shared-old/x.yaml".
+func (a *analyzer) fileReferencedByKustomization(changedFile string, kust discovery.KustomizeFile) (referenceMatch, bool) {
 	changedFile = filepath.Clean(changedFile)
 	kustDir := filepath.Clean(kust.Dir)
 
-	// Check if the changed file is in the same directory or subdirectory.
-	// The separator matters: without it "/repo/base-old/x.yaml" would be treated
-	// as living under "/repo/base".
-	if !strings.HasPrefix(changedFile, kustDir+string(filepath.Separator)) {
-		return false
-	}
-
-	// Check if this relative path is in resources
 	for _, resource := range kust.Resources {
-		// Resource could be a file or directory
+		// A resource may be a file or a directory, and may escape kustDir.
 		resourcePath := filepath.Clean(filepath.Join(kustDir, resource))
 
-		// Check if changed file is the resource or inside a resource directory
-		if changedFile == resourcePath || strings.HasPrefix(changedFile, resourcePath+string(filepath.Separator)) {
-			return true
+		// The changed file is the reference itself, or lives inside it. The
+		// trailing separator is load-bearing: without it "/repo/shared" would
+		// match "/repo/shared-old/x.yaml".
+		if changedFile == resourcePath ||
+			strings.HasPrefix(changedFile, resourcePath+string(filepath.Separator)) {
+			return referenceMatch{Raw: resource, Resolved: resourcePath}, true
 		}
 	}
 
-	return false
+	return referenceMatch{}, false
 }
 
 // isKustomizationFile checks if a filename is a kustomization file

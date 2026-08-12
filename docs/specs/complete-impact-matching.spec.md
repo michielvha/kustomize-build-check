@@ -63,6 +63,26 @@ bogus failure to catch this case. Group A closes it for the right reason, becaus
 containment guard is gone the deleted `base/deployment.yaml` matches `overlays/dev`'s `../../base`
 reference directly. This raises the priority of Phase A rather than changing its content.
 
+**Correction from implementing Phase 1 (2026-08-12).** G1's canonical example — a kustomization
+listing `../shared/cm.yaml` — is **not buildable** under the action's own invocation. Kustomize's
+default load restrictor rejects a resource file outside the kustomization root
+(`security; file '…/shared/cm.yaml' is not in or below '…/base'`), and this action does not pass
+`--load-restrictor LoadRestrictionsNone`. Verified with kustomize v5.8.1.
+
+That does not invalidate G1, but it sharpens it. The false pass is real — the run reports
+"No kustomizations affected by changes" and exits 0 while the repo is broken — yet the payoff of
+removing the containment guard is **not** "that file reference now builds". It is:
+
+1. the referencing directory is **validated at all**, so a genuine load-restrictor violation is
+   surfaced instead of hidden; and
+2. **G5 and its bare-base variant are closed**, which are the buildable, common cases: an overlay
+   referencing `../../base` where `base` was deleted. The standard overlay pattern where the base
+   still exists was already covered by the graph, so the guard's removal matters precisely where
+   the referenced path has no discovered node.
+
+The acceptance criteria were written accordingly: the Phase 1 E2E asserts the directory is
+validated and its breakage reported, not that it builds successfully.
+
 **The false-pass classes being closed**
 
 | ID | Class | Where it lives today | Phase |

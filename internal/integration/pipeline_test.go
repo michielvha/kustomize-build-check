@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -430,5 +432,103 @@ func TestDeletedResourceStillReferencedFails(t *testing.T) {
 	}
 	if res := resultFor(t, summary, r.path("base")); res.Skipped {
 		t.Error("the base directory still exists and must not be skipped")
+	}
+}
+
+// assertAffected compares the set of validated paths against an exact expected
+// set. It asserts **equality**, not containment, so over-matching fails as
+// loudly as under-matching — this tool can be wrong in both directions and the
+// tests must be able to say so (F-E4).
+//
+// Paths are given repo-relative and resolved against the fixture root.
+func (r *repo) assertAffected(s reporter.Summary, want ...string) {
+	r.t.Helper()
+
+	got := make([]string, 0, len(s.Results))
+	for _, res := range s.Results {
+		got = append(got, res.Path)
+	}
+	wantAbs := make([]string, 0, len(want))
+	for _, w := range want {
+		wantAbs = append(wantAbs, r.path(w))
+	}
+	sort.Strings(got)
+	sort.Strings(wantAbs)
+
+	if !slices.Equal(got, wantAbs) {
+		r.t.Errorf("validated set mismatch\n  got:  %s\n  want: %s",
+			strings.Join(got, "\n        "), strings.Join(wantAbs, "\n        "))
+	}
+}
+
+// TestCrossDirectoryResourceIsValidatedNotSilentlyIgnored is the end-to-end
+// guard for G1 (AC-A1, AC-A2, AC-A3).
+//
+// Note what is asserted, and why. A cross-directory *file* reference is rejected
+// by kustomize's default load restrictor ("security; file ... is not in or below
+// ..."), and this action does not pass --load-restrictor LoadRestrictionsNone.
+// So the meaningful assertion is not "base builds" — it cannot — but that the
+// directory is **validated at all**. Before this phase nothing marked it
+// affected, so the run reported "No kustomizations affected by changes" and
+// exited 0 while the repo was broken. Now the breakage is surfaced.
+//
+// The fixture includes a `base-old/` sibling that must NOT be dragged in, which
+// is why the assertion is set equality rather than containment.
+func TestCrossDirectoryResourceIsValidatedNotSilentlyIgnored(t *testing.T) {
+	r := newRepo(t)
+	r.write("shared/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\ndata:\n  k: v\n")
+	r.write("base/kustomization.yaml", kustomizationHeader+"resources:\n  - ../shared/cm.yaml\n")
+	// A sibling whose name shares a prefix with `base`, and its own resource.
+	r.write("base-old/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: old\n")
+	r.write("base-old/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\n")
+	r.commitBase()
+
+	r.write("shared/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\ndata:\n  k: CHANGED\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	// Exactly base — not base-old, which shares a prefix but references nothing changed.
+	r.assertAffected(summary, "base")
+
+	// The run must not be silently green: the directory is validated, and the
+	// load-restrictor violation it contains is now reported instead of hidden.
+	if summary.Failed == 0 {
+		t.Errorf("the referencing directory must be validated and its breakage surfaced, got %+v", summary)
+	}
+	if res := resultFor(t, summary, r.path("base")); res.Skipped {
+		t.Error("base still exists and must not be skipped")
+	}
+}
+
+// TestDeletedBaseFailsDependentOverlay is the end-to-end guard for G5 (AC-A7).
+//
+// Deleting a base while an overlay still references it is a genuine breakage.
+// Before this phase the removed path was correctly skipped and nothing else was
+// marked affected, so the run reported "All builds successful" and exited 0
+// against a repo where `kustomize build` fails.
+func TestDeletedBaseFailsDependentOverlay(t *testing.T) {
+	r := newRepo(t)
+	r.write("base/kustomization.yaml", kustomizationHeader+"resources:\n  - deployment.yaml\n")
+	r.write("base/deployment.yaml", "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\n")
+	r.write("overlays/dev/kustomization.yaml", kustomizationHeader+"resources:\n  - ../../base\n")
+	r.commitBase()
+
+	r.remove("base")
+	r.commitChange()
+
+	summary := r.run()
+
+	// The removed base is skipped; the overlay that still consumes it fails.
+	r.assertAffected(summary, "base", "overlays/dev")
+
+	if res := resultFor(t, summary, r.path("base")); !res.Skipped {
+		t.Errorf("the removed base must be skipped, got %+v", res)
+	}
+	if res := resultFor(t, summary, r.path("overlays/dev")); res.Success || res.Skipped {
+		t.Errorf("the dependent overlay must fail, got %+v", res)
+	}
+	if summary.Failed == 0 {
+		t.Fatalf("deleting a referenced base must fail the check, got %+v", summary)
 	}
 }
