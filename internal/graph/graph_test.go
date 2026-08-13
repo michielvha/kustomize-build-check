@@ -2,6 +2,7 @@ package graph
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/michielvha/kustomize-build-check/internal/discovery"
@@ -138,11 +139,121 @@ func TestExtractDependencies(t *testing.T) {
 
 	deps := g.extractDependencies(file)
 
-	// Should have: ../base (from resources), ../../common (from bases), ../../components/monitoring (from components)
-	// Should NOT have: deployment.yaml, service.yaml (they have extensions)
-	expectedCount := 3
+	// Every reference is returned, in resources -> bases -> components order.
+	// File entries are no longer filtered out here: whether a reference becomes
+	// an edge is decided by looking for a discovered kustomization at the
+	// resolved path, not by guessing from the name. See ADR-001.
+	//
+	// This count is an assertion on an intermediate value, so it carries little
+	// signal on its own. The property it used to stand for — that file entries
+	// produce no edges — is asserted directly by
+	// TestExtractDependenciesProducesEdgesOnlyForDiscoveredDirs.
+	expectedCount := 5
 	if len(deps) != expectedCount {
 		t.Errorf("expected %d dependencies, got %d: %v", expectedCount, len(deps), deps)
+	}
+}
+
+// TestExtractDependenciesProducesEdgesOnlyForDiscoveredDirs asserts the property
+// the old count assertion stood for: returning file entries from
+// extractDependencies does not create spurious edges, because an edge requires a
+// discovered kustomization at the resolved path (AC-B4).
+func TestExtractDependenciesProducesEdgesOnlyForDiscoveredDirs(t *testing.T) {
+	root := t.TempDir()
+	overlay := filepath.Join(root, "overlays", "dev")
+	base := filepath.Join(root, "base")
+
+	files := []discovery.KustomizeFile{
+		{
+			Path: filepath.Join(overlay, "kustomization.yaml"),
+			Dir:  overlay,
+			// Two file entries that must never become edges, and one real base.
+			Resources: []string{"deployment.yaml", "../../base", "service.yaml"},
+		},
+		{Path: filepath.Join(base, "kustomization.yaml"), Dir: base},
+	}
+
+	g := New().(*DependencyGraph)
+	if err := g.Build(files); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	// The discovered base has the overlay as its dependent.
+	if got := g.GetDependentOverlays(base); len(got) != 1 || got[0] != overlay {
+		t.Errorf("base should have exactly the overlay as dependent, got %v", got)
+	}
+
+	// Only the discovered base is marked IsBase. Reverse-lookup keys are
+	// recorded for every reference (so a deleted base still propagates, see
+	// Build), but a plain manifest file never becomes a node and never becomes
+	// a base — which is what stops it being treated as one.
+	if node := g.GetNode(base); node == nil || !node.IsBase {
+		t.Errorf("the discovered base must be marked IsBase, got %+v", node)
+	}
+	for _, notABase := range []string{
+		filepath.Join(overlay, "deployment.yaml"),
+		filepath.Join(overlay, "service.yaml"),
+	} {
+		if node := g.GetNode(notABase); node != nil {
+			t.Errorf("a plain manifest file must never become a node: %s -> %+v", notABase, node)
+		}
+		if g.IsBase(notABase) {
+			t.Errorf("a plain manifest file must never be a base: %s", notABase)
+		}
+	}
+}
+
+// TestDottedDirectoryNamesKeepEdges is the G4 guard: a directory whose name
+// contains a dot used to be misread as a file by filepath.Ext, silently losing
+// the base-to-overlay edge (AC-B1, AC-B2).
+func TestDottedDirectoryNamesKeepEdges(t *testing.T) {
+	root := t.TempDir()
+
+	for _, baseRel := range []string{filepath.Join("bases", "v1.2"), "my.app"} {
+		t.Run(baseRel, func(t *testing.T) {
+			base := filepath.Join(root, baseRel)
+			overlay := filepath.Join(root, "overlays", "dev")
+			rel, err := filepath.Rel(overlay, base)
+			if err != nil {
+				t.Fatalf("Rel failed: %v", err)
+			}
+
+			files := []discovery.KustomizeFile{
+				{Path: filepath.Join(overlay, "kustomization.yaml"), Dir: overlay, Resources: []string{rel}},
+				{Path: filepath.Join(base, "kustomization.yaml"), Dir: base},
+			}
+
+			g := New().(*DependencyGraph)
+			if err := g.Build(files); err != nil {
+				t.Fatalf("Build failed: %v", err)
+			}
+
+			deps := g.GetAllDependents(base)
+			if !slices.Contains(deps, overlay) {
+				t.Errorf("a dotted base directory must keep its edge; %s -> %v", baseRel, deps)
+			}
+		})
+	}
+}
+
+// TestMissingReferencePathProducesNoEdge covers AC-B5: a reference pointing at
+// nothing must not panic, error, or invent a node.
+func TestMissingReferencePathProducesNoEdge(t *testing.T) {
+	root := t.TempDir()
+	overlay := filepath.Join(root, "overlays", "dev")
+
+	files := []discovery.KustomizeFile{{
+		Path:      filepath.Join(overlay, "kustomization.yaml"),
+		Dir:       overlay,
+		Resources: []string{"../../does-not-exist"},
+	}}
+
+	g := New().(*DependencyGraph)
+	if err := g.Build(files); err != nil {
+		t.Fatalf("Build must not error on a dangling reference: %v", err)
+	}
+	if node := g.GetNode(filepath.Join(root, "does-not-exist")); node != nil {
+		t.Errorf("a dangling reference must not create a node, got %+v", node)
 	}
 }
 
