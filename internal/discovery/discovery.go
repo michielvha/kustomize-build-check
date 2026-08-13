@@ -20,6 +20,13 @@ type FieldError struct {
 
 func (e FieldError) Error() string { return e.Field + ": " + e.Err.Error() }
 
+// Ref is a single file reference, recording where it came from so an unexpected
+// match can be traced back to the field that produced it.
+type Ref struct {
+	Field string // the kustomization field, e.g. "configMapGenerator.files"
+	Raw   string // the reference as written, after alias stripping
+}
+
 // KustomizeFile represents a parsed kustomization file
 type KustomizeFile struct {
 	Path       string   // Absolute path to kustomization.yaml
@@ -40,6 +47,12 @@ type KustomizeFile struct {
 	// not know what those fields referenced, so the directory must be treated as
 	// always affected rather than as having no references.
 	FieldErrs []FieldError
+
+	// FileRefs is every local file this kustomization pulls in, from any field.
+	// It is the single source the analyzer matches changed files against, so
+	// there is exactly one matching path regardless of which field a reference
+	// came from.
+	FileRefs []Ref
 }
 
 // Unknown reports whether anything about this file's references could not be
@@ -152,7 +165,143 @@ func (d *discoverer) ParseKustomization(path string) (*KustomizeFile, error) {
 	kf.Bases = decodeStrings(kf, doc, "bases")
 	kf.Components = decodeStrings(kf, doc, "components")
 
+	kf.collectFileRefs(doc)
+
 	return kf, nil
+}
+
+// collectFileRefs gathers every field that can name a local file.
+//
+// Directory-shaped fields (bases, components) are deliberately absent: those
+// become graph edges, not file matches. `resources` appears in both because an
+// entry may be either, and the resolved comparison sorts that out.
+func (kf *KustomizeFile) collectFileRefs(doc map[string]yaml.Node) {
+	kf.addRefs("resources", kf.Resources...)
+
+	// patches[] entries are objects: {path, target} or an inline {patch}.
+	// An entry with no path contributes nothing and is not an error.
+	for _, p := range decodeObjectList(kf, doc, "patches") {
+		kf.addRefs("patches.path", decodeField[string](p, "path")...)
+	}
+	// patchesJson6902[] is the deprecated equivalent, same shape.
+	for _, p := range decodeObjectList(kf, doc, "patchesJson6902") {
+		kf.addRefs("patchesJson6902.path", decodeField[string](p, "path")...)
+	}
+	// patchesStrategicMerge[] is a plain list of paths (deprecated).
+	kf.addRefs("patchesStrategicMerge", decodeStrings(kf, doc, "patchesStrategicMerge")...)
+
+	// Generators: files and envs both name local files, both accept the
+	// "key=path" alias form.
+	for _, field := range []string{"configMapGenerator", "secretGenerator"} {
+		for _, g := range decodeObjectList(kf, doc, field) {
+			kf.addRefs(field+".files", decodeField[[]string](g, "files")...)
+			kf.addRefs(field+".envs", decodeField[[]string](g, "envs")...)
+			// `env` is the deprecated singular form.
+			kf.addRefs(field+".env", decodeField[string](g, "env")...)
+		}
+	}
+
+	// helmCharts[] valuesFile / additionalValuesFiles are local files whose
+	// contents change the rendered output.
+	for _, h := range decodeObjectList(kf, doc, "helmCharts") {
+		kf.addRefs("helmCharts.valuesFile", decodeField[string](h, "valuesFile")...)
+		kf.addRefs("helmCharts.additionalValuesFiles", decodeField[[]string](h, "additionalValuesFiles")...)
+	}
+
+	// Lower-traffic surfaces that still resolve local files.
+	kf.addRefs("crds", decodeStrings(kf, doc, "crds")...)
+	kf.addRefs("configurations", decodeStrings(kf, doc, "configurations")...)
+	// openapi is a mapping, not a list (verified against kustomize v5.8.1).
+	if o := decodeObject(kf, doc, "openapi"); o != nil {
+		kf.addRefs("openapi.path", decodeField[string](o, "path")...)
+	}
+}
+
+// addRefs normalises and records references, dropping the ones that cannot name
+// a local file.
+func (kf *KustomizeFile) addRefs(field string, refs ...string) {
+	for _, raw := range refs {
+		if raw == "" {
+			continue
+		}
+		// Remote references are never local files, so they can never be matched
+		// against a changed path. Skipping them keeps them out of the resolver,
+		// where they would resolve to a nonsense path under the kustomization.
+		if strings.Contains(raw, "://") || strings.HasPrefix(raw, "git@") {
+			slog.Debug("Skipping non-local reference", "field", field, "ref", raw)
+			continue
+		}
+		kf.FileRefs = append(kf.FileRefs, Ref{Field: field, Raw: stripAlias(field, raw)})
+	}
+}
+
+// stripAlias handles the "key=path" form accepted by generator files/envs.
+//
+// Only generator fields use it. Applying it everywhere would corrupt a legal
+// filename containing "=" in fields that have no alias form — which is exactly
+// the trap: a naive parser looks for a file literally named "aliaskey=real.txt".
+func stripAlias(field, raw string) string {
+	if !strings.Contains(field, ".files") && !strings.Contains(field, ".envs") && !strings.HasSuffix(field, ".env") {
+		return raw
+	}
+	key, path, found := strings.Cut(raw, "=")
+	if !found || key == "" {
+		// No alias, or a leading "=" — treat the whole string as the path. A
+		// filename containing "=" with no alias is an accepted limitation.
+		return raw
+	}
+	slog.Debug("Split generator alias", "field", field, "raw", raw, "path", path)
+	return path
+}
+
+// decodeObjectList decodes a list-of-mappings field, recording a FieldError
+// rather than failing the file when the shape is wrong.
+func decodeObjectList(kf *KustomizeFile, doc map[string]yaml.Node, field string) []map[string]yaml.Node {
+	node, ok := doc[field]
+	if !ok {
+		return nil
+	}
+	var out []map[string]yaml.Node
+	if err := node.Decode(&out); err != nil {
+		kf.FieldErrs = append(kf.FieldErrs, FieldError{Field: field, Err: err})
+		return nil
+	}
+	return out
+}
+
+// decodeObject decodes a single mapping field.
+func decodeObject(kf *KustomizeFile, doc map[string]yaml.Node, field string) map[string]yaml.Node {
+	node, ok := doc[field]
+	if !ok {
+		return nil
+	}
+	var out map[string]yaml.Node
+	if err := node.Decode(&out); err != nil {
+		kf.FieldErrs = append(kf.FieldErrs, FieldError{Field: field, Err: err})
+		return nil
+	}
+	return out
+}
+
+// decodeField pulls one typed value out of a decoded mapping. A missing or
+// undecodable key yields nothing: these are optional by design (a patches entry
+// may carry an inline `patch` and no `path`), so this is not a FieldError.
+func decodeField[T any](obj map[string]yaml.Node, key string) []string {
+	node, ok := obj[key]
+	if !ok {
+		return nil
+	}
+	var v T
+	if err := node.Decode(&v); err != nil {
+		return nil
+	}
+	switch typed := any(v).(type) {
+	case string:
+		return []string{typed}
+	case []string:
+		return typed
+	}
+	return nil
 }
 
 // decodeStrings decodes one string-list field, recording a FieldError instead of

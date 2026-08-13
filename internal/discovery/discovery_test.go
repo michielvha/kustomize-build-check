@@ -3,6 +3,7 @@ package discovery
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -229,5 +230,195 @@ func TestFindAllRetainsUnparseableFiles(t *testing.T) {
 	}
 	if len(files) != 2 {
 		t.Fatalf("both files must be retained, got %d: %+v", len(files), files)
+	}
+}
+
+// TestFileRefsSupersetOfResources is the guard for the one narrowing step in
+// this work: the analyzer switched from matching Resources to matching FileRefs,
+// so FileRefs must never lose an entry Resources had.
+func TestFileRefsSupersetOfResources(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kustomization.yaml")
+	// Includes a filename containing "=", which the alias splitter must NOT
+	// touch outside generator fields.
+	content := "resources:\n  - deployment.yaml\n  - ../base\n  - weird=name.yaml\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	kf, err := New().ParseKustomization(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	for _, want := range kf.Resources {
+		found := false
+		for _, ref := range kf.FileRefs {
+			if ref.Raw == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("resources entry %q is missing from FileRefs: %+v", want, kf.FileRefs)
+		}
+	}
+}
+
+// TestGeneratorAliasIsSplit covers the alias trap (AC-D4). `files` accepts a
+// "key=path" form, so a naive parser looks for a file literally named
+// "aliaskey=real-file.txt". Deliberately its own test, not folded into a table.
+func TestGeneratorAliasIsSplit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kustomization.yaml")
+	content := "configMapGenerator:\n  - name: cm\n    files:\n      - aliaskey=real-file.txt\n      - plain.txt\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	kf, err := New().ParseKustomization(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	var raws []string
+	for _, ref := range kf.FileRefs {
+		raws = append(raws, ref.Raw)
+	}
+	for _, want := range []string{"real-file.txt", "plain.txt"} {
+		if !slices.Contains(raws, want) {
+			t.Errorf("expected %q in FileRefs, got %v", want, raws)
+		}
+	}
+	if slices.Contains(raws, "aliaskey=real-file.txt") {
+		t.Errorf("the alias must be stripped, got %v", raws)
+	}
+}
+
+// TestAliasSplitterDoesNotTouchNonGeneratorFields guards the inverse: a legal
+// filename containing "=" in a field with no alias form must survive intact.
+func TestAliasSplitterDoesNotTouchNonGeneratorFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kustomization.yaml")
+	if err := os.WriteFile(path, []byte("resources:\n  - weird=name.yaml\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	kf, err := New().ParseKustomization(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var raws []string
+	for _, ref := range kf.FileRefs {
+		raws = append(raws, ref.Raw)
+	}
+	if !slices.Contains(raws, "weird=name.yaml") {
+		t.Errorf("a filename containing = must survive outside generator fields, got %v", raws)
+	}
+}
+
+// TestReferenceSurfaces covers one scenario per field family (F-D1..F-D8).
+func TestReferenceSurfaces(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"patches path", "patches:\n  - path: patch.yaml\n", "patch.yaml"},
+		{"patchesStrategicMerge", "patchesStrategicMerge:\n  - legacy.yaml\n", "legacy.yaml"},
+		{"patchesJson6902", "patchesJson6902:\n  - path: j6902.yaml\n    target: {kind: Deployment}\n", "j6902.yaml"},
+		{"configMapGenerator files", "configMapGenerator:\n  - name: cm\n    files:\n      - cm-file.txt\n", "cm-file.txt"},
+		{"configMapGenerator envs", "configMapGenerator:\n  - name: cm\n    envs:\n      - cm.env\n", "cm.env"},
+		{"secretGenerator envs", "secretGenerator:\n  - name: s\n    envs:\n      - sec.env\n", "sec.env"},
+		{"helmCharts valuesFile", "helmCharts:\n  - name: demo\n    valuesFile: values.yaml\n", "values.yaml"},
+		{"helmCharts additionalValuesFiles", "helmCharts:\n  - name: demo\n    additionalValuesFiles:\n      - extra.yaml\n", "extra.yaml"},
+		{"crds", "crds:\n  - crd.json\n", "crd.json"},
+		{"configurations", "configurations:\n  - namereference.yaml\n", "namereference.yaml"},
+		{"openapi path", "openapi:\n  path: schema.json\n", "schema.json"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "kustomization.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			kf, err := New().ParseKustomization(path)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			var raws []string
+			for _, ref := range kf.FileRefs {
+				raws = append(raws, ref.Raw)
+			}
+			if !slices.Contains(raws, tt.want) {
+				t.Errorf("expected %q in FileRefs, got %v (field errors: %+v)", tt.want, raws, kf.FieldErrs)
+			}
+		})
+	}
+}
+
+// TestInlinePatchWithoutPathIsNotAnError covers F-D2: a patches entry may carry
+// an inline `patch` and no `path`, which contributes nothing and is legal.
+func TestInlinePatchWithoutPathIsNotAnError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kustomization.yaml")
+	content := "patches:\n  - patch: |-\n      - op: replace\n        path: /spec/replicas\n        value: 3\n    target: {kind: Deployment}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	kf, err := New().ParseKustomization(path)
+	if err != nil {
+		t.Fatalf("an inline patch must not error: %v", err)
+	}
+	if kf.Unknown() {
+		t.Errorf("an inline patch must not make the file Unknown, got %+v", kf)
+	}
+	if len(kf.FileRefs) != 0 {
+		t.Errorf("an inline patch contributes no file refs, got %+v", kf.FileRefs)
+	}
+}
+
+// TestRemoteReferencesAreSkipped covers F-D12: a remote reference is never a
+// local file, so it must not be resolved against the kustomization directory.
+func TestRemoteReferencesAreSkipped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kustomization.yaml")
+	content := "resources:\n  - https://example.com/manifest.yaml\n  - git@github.com:org/repo.git//overlay\n  - local.yaml\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	kf, err := New().ParseKustomization(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(kf.FileRefs) != 1 || kf.FileRefs[0].Raw != "local.yaml" {
+		t.Errorf("only the local reference may become a FileRef, got %+v", kf.FileRefs)
+	}
+}
+
+// TestWrongShapeFieldIsRecordedNotFatal covers F-C6 for the new surfaces.
+func TestWrongShapeFieldIsRecordedNotFatal(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kustomization.yaml")
+	if err := os.WriteFile(path, []byte("resources:\n  - ok.yaml\nconfigMapGenerator: \"oops\"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	kf, err := New().ParseKustomization(path)
+	if err != nil {
+		t.Fatalf("a wrong-shape field must not fail the file: %v", err)
+	}
+	if kf.Unparsed {
+		t.Error("a wrong-shape field must not mark the file Unparsed")
+	}
+	if len(kf.FieldErrs) == 0 {
+		t.Error("a wrong-shape field must record a FieldError")
+	}
+	if !kf.Unknown() {
+		t.Error("a field error means references are unknown")
 	}
 }

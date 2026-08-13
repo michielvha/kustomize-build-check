@@ -136,7 +136,7 @@ func (r *repo) run() reporter.Summary {
 	}
 
 	affected := analyzer.New().GetAffectedKustomizations(changedFiles, g, kustomizations)
-	results := builder.New().BuildAll(affected, false)
+	results := builder.New().BuildAll(affected, true)
 
 	return reporter.New().GenerateSummary(results)
 }
@@ -678,4 +678,115 @@ func TestUnparseableKustomizationKeepsItsGraphNode(t *testing.T) {
 
 	// base is always-affected; overlays/dev still reaches it through the graph.
 	r.assertAffected(summary, "base", "overlays/dev")
+}
+
+// TestEveryReferenceSurfaceMarksItsDirectory is the G2 guard: editing a file
+// that a kustomization pulls in through any supported field must validate that
+// directory. Before this phase only `resources` was parsed, so a change to a
+// patch or a generator input passed with nothing validated.
+//
+// Each case is a real repository built by real kustomize, so a field shape this
+// tool gets wrong shows up as a failing build rather than a passing unit test.
+func TestEveryReferenceSurfaceMarksItsDirectory(t *testing.T) {
+	deployment := "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 1\n  selector:\n    matchLabels: {app: a}\n  template:\n    metadata:\n      labels: {app: a}\n    spec:\n      containers:\n        - name: c\n          image: nginx\n"
+
+	tests := []struct {
+		name      string
+		kustomize string
+		extra     map[string]string
+		editFile  string
+		editTo    string
+	}{
+		{
+			name:      "patches path",
+			kustomize: kustomizationHeader + "resources:\n  - deployment.yaml\npatches:\n  - path: patch.yaml\n",
+			extra: map[string]string{
+				"deployment.yaml": deployment,
+				"patch.yaml":      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 2\n",
+			},
+			editFile: "app/patch.yaml",
+			editTo:   "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 5\n",
+		},
+		{
+			name:      "configMapGenerator files",
+			kustomize: kustomizationHeader + "configMapGenerator:\n  - name: cm\n    files:\n      - data.txt\n",
+			extra:     map[string]string{"data.txt": "hello\n"},
+			editFile:  "app/data.txt",
+			editTo:    "changed\n",
+		},
+		{
+			name:      "secretGenerator envs",
+			kustomize: kustomizationHeader + "secretGenerator:\n  - name: sec\n    envs:\n      - sec.env\n",
+			extra:     map[string]string{"sec.env": "k=v\n"},
+			editFile:  "app/sec.env",
+			editTo:    "k=changed\n",
+		},
+		{
+			name:      "patchesStrategicMerge",
+			kustomize: kustomizationHeader + "resources:\n  - deployment.yaml\npatchesStrategicMerge:\n  - legacy.yaml\n",
+			extra: map[string]string{
+				"deployment.yaml": deployment,
+				"legacy.yaml":     "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 3\n",
+			},
+			editFile: "app/legacy.yaml",
+			editTo:   "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 4\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRepo(t)
+			r.write("app/kustomization.yaml", tt.kustomize)
+			for name, body := range tt.extra {
+				r.write("app/"+name, body)
+			}
+			r.commitBase()
+
+			// Sanity: the fixture is a real, buildable kustomization.
+			r.t.Chdir(r.dir)
+			if out, err := exec.Command("kustomize", "build", r.path("app")).CombinedOutput(); err != nil {
+				t.Fatalf("fixture must build before the change: %v\n%s", err, out)
+			}
+
+			r.write(tt.editFile, tt.editTo)
+			r.commitChange()
+
+			summary := r.run()
+
+			r.assertAffected(summary, "app")
+			if summary.Failed != 0 {
+				t.Errorf("expected no failures, got %d\n     %s", summary.Failed, paths(summary))
+			}
+		})
+	}
+}
+
+// TestHelmValuesFileMarksItsDirectory covers F-D7 end to end. helmCharts values
+// files are a genuine reference surface: editing one changes the rendered output
+// and deleting one breaks the build, yet nothing parsed them before this phase.
+//
+// This is the one surface that needs helm on PATH, so it skips without it.
+func TestHelmValuesFileMarksItsDirectory(t *testing.T) {
+	requireBinary(t, "helm")
+
+	r := newRepo(t)
+	r.write("app/charts/demo/Chart.yaml", "apiVersion: v2\nname: demo\nversion: 0.1.0\n")
+	r.write("app/charts/demo/values.yaml", "r: 7\n")
+	r.write("app/charts/demo/templates/cm.yaml",
+		"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\ndata:\n  r: \"{{ .Values.r }}\"\n")
+	r.write("app/override.yaml", "r: 9\n")
+	r.write("app/kustomization.yaml", kustomizationHeader+
+		"helmCharts:\n  - name: demo\n    releaseName: demo\n    valuesFile: override.yaml\nhelmGlobals:\n  chartHome: charts\n")
+	r.commitBase()
+
+	// Change ONLY the values file.
+	r.write("app/override.yaml", "r: 11\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	r.assertAffected(summary, "app")
+	if summary.Failed != 0 {
+		t.Errorf("expected no failures, got %d\n     %s", summary.Failed, paths(summary))
+	}
 }

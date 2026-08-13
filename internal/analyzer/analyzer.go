@@ -85,6 +85,7 @@ func (a *analyzer) GetAffectedKustomizations(
 				slog.Debug("Changed file referenced by kustomization",
 					"file", changedFile,
 					"kustomization", kust.Dir,
+					"field", match.Field,
 					"reference", match.Raw,
 					"resolved", match.Resolved)
 				a.addAffected(kust.Dir, g, affected)
@@ -134,6 +135,7 @@ func (a *analyzer) addAffected(dir string, g graph.Graph, affected map[string]bo
 // report it. Both forms are needed: the raw string is what the author wrote,
 // the resolved path is what it actually points at.
 type referenceMatch struct {
+	Field    string // the kustomization field it came from, e.g. "patches.path"
 	Raw      string // the reference exactly as written, e.g. "../shared/cm.yaml"
 	Resolved string // absolute, cleaned, e.g. "/repo/shared/cm.yaml"
 }
@@ -159,16 +161,19 @@ func (a *analyzer) fileReferencedByKustomization(changedFile string, kust discov
 	changedFile = filepath.Clean(changedFile)
 	kustDir := filepath.Clean(kust.Dir)
 
-	for _, resource := range kust.Resources {
-		// A resource may be a file or a directory, and may escape kustDir.
-		resourcePath := filepath.Clean(filepath.Join(kustDir, resource))
+	// FileRefs is the single matching path: every field that can name a local
+	// file feeds it, so there is no second set of rules for patches, generators
+	// or helm values.
+	for _, ref := range kust.FileRefs {
+		// A reference may be a file or a directory, and may escape kustDir.
+		resolved := filepath.Clean(filepath.Join(kustDir, ref.Raw))
 
 		// The changed file is the reference itself, or lives inside it. The
 		// trailing separator is load-bearing: without it "/repo/shared" would
 		// match "/repo/shared-old/x.yaml".
-		if changedFile == resourcePath ||
-			strings.HasPrefix(changedFile, resourcePath+string(filepath.Separator)) {
-			return referenceMatch{Raw: resource, Resolved: resourcePath}, true
+		if changedFile == resolved ||
+			strings.HasPrefix(changedFile, resolved+string(filepath.Separator)) {
+			return referenceMatch{Field: ref.Field, Raw: ref.Raw, Resolved: resolved}, true
 		}
 	}
 
