@@ -532,3 +532,60 @@ func TestDeletedBaseFailsDependentOverlay(t *testing.T) {
 		t.Fatalf("deleting a referenced base must fail the check, got %+v", summary)
 	}
 }
+
+// TestDottedBaseDirectoryPropagatesToOverlay is the end-to-end guard for G4
+// (AC-B1, AC-B2, AC-B3).
+//
+// `filepath.Ext("../../bases/v1.2")` is ".2", so the old classifier read this
+// directory reference as a file and dropped the base-to-overlay edge. Editing
+// the base then propagated to nothing.
+func TestDottedBaseDirectoryPropagatesToOverlay(t *testing.T) {
+	r := newRepo(t)
+	r.write("bases/v1.2/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\n")
+	r.write("bases/v1.2/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\ndata:\n  k: v\n")
+	r.write("overlays/dev/kustomization.yaml", kustomizationHeader+"resources:\n  - ../../bases/v1.2\n")
+	r.commitBase()
+
+	r.write("bases/v1.2/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\ndata:\n  k: CHANGED\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	// The edited base AND the overlay that consumes it.
+	r.assertAffected(summary, "bases/v1.2", "overlays/dev")
+	if summary.Failed != 0 {
+		t.Errorf("expected no failures, got %d\n     %s", summary.Failed, paths(summary))
+	}
+}
+
+// TestDeletedBareBaseFailsDependentOverlay is the AC-B7 guard.
+//
+// This is the variant Phase 1 could NOT close. When the deleted base directory
+// held nothing but its kustomization.yaml, the only changed path is that file
+// itself, so there is nothing *under* the directory for resolved-reference
+// matching to catch. It is caught instead by the graph recording the reverse
+// edge even where no node was discovered.
+func TestDeletedBareBaseFailsDependentOverlay(t *testing.T) {
+	r := newRepo(t)
+	// base/ holds ONLY kustomization.yaml.
+	r.write("base/kustomization.yaml", kustomizationHeader+"resources: []\n")
+	r.write("overlays/dev/kustomization.yaml", kustomizationHeader+"resources:\n  - ../../base\n")
+	r.commitBase()
+
+	r.remove("base")
+	r.commitChange()
+
+	summary := r.run()
+
+	r.assertAffected(summary, "base", "overlays/dev")
+
+	if res := resultFor(t, summary, r.path("base")); !res.Skipped {
+		t.Errorf("the removed base must be skipped, got %+v", res)
+	}
+	if res := resultFor(t, summary, r.path("overlays/dev")); res.Success || res.Skipped {
+		t.Errorf("the dependent overlay must fail, got %+v", res)
+	}
+	if summary.Failed == 0 {
+		t.Fatalf("deleting a bare referenced base must fail the check, got %+v", summary)
+	}
+}

@@ -11,9 +11,13 @@ import (
 
 // Node represents a kustomization in the dependency graph
 type Node struct {
-	Path         string
-	IsBase       bool
-	Dependencies []string // Paths this node depends on
+	Path   string
+	IsBase bool
+	// Dependencies holds every reference as written in the kustomization
+	// (resources, bases and components), before resolution. It is a record of
+	// what was referenced, not of which edges exist: an edge exists only where
+	// the resolved path is a discovered kustomization. See extractDependencies.
+	Dependencies []string
 }
 
 // DependencyGraph represents the relationship between kustomizations
@@ -70,17 +74,31 @@ func (g *DependencyGraph) Build(files []discovery.KustomizeFile) error {
 			absDepPath := filepath.Join(file.Dir, dep)
 			absDepPath = filepath.Clean(absDepPath)
 
-			// Check if this dependency is a kustomization directory
+			// The reverse edge is recorded whether or not a kustomization was
+			// discovered at the resolved path.
+			//
+			// Recording it only for discovered nodes looks right but hides a
+			// real breakage: discovery walks the *post-change* tree, so a base
+			// the change deleted has no node, gets no reverse edge, and its
+			// surviving overlays are never marked affected. The run then reports
+			// success while `kustomize build` on those overlays fails.
+			//
+			// This cannot over-match. addAffected is only ever called with a
+			// kustomization directory, so a reverse key that names something
+			// which is not one (a plain manifest file, say) is simply never
+			// looked up.
+			g.reverseLookup[absDepPath] = append(g.reverseLookup[absDepPath], file.Dir)
+
 			if depNode, exists := g.nodes[absDepPath]; exists {
 				depNode.IsBase = true
-				g.reverseLookup[absDepPath] = append(g.reverseLookup[absDepPath], file.Dir)
 				slog.Debug("Added reverse lookup",
 					"base", absDepPath,
 					"dependent", file.Dir)
 			} else {
-				slog.Debug("Dependency not found in discovered kustomizations",
+				slog.Debug("Added reverse lookup for an undiscovered path",
 					"dependency", absDepPath,
-					"referenced_by", file.Dir)
+					"referenced_by", file.Dir,
+					"note", "deleted base, or a file reference that is not a kustomization")
 			}
 		}
 	}
@@ -92,31 +110,39 @@ func (g *DependencyGraph) Build(files []discovery.KustomizeFile) error {
 	return nil
 }
 
-// extractDependencies extracts all dependency paths from a kustomization file
+// extractDependencies returns every reference that could name another
+// kustomization, exactly as written.
+//
+// It deliberately does not try to tell a file reference from a directory
+// reference. That question is answered later, and correctly, by asking whether a
+// kustomization was actually discovered at the resolved path (see Build). The
+// previous `filepath.Ext(resource) != ""` heuristic guessed from the name and
+// got it wrong for any directory containing a dot: `filepath.Ext("../bases/v1.2")`
+// is ".2" and `filepath.Ext("../my.app")` is ".app", so both were treated as
+// files and their base-to-overlay edges were silently dropped.
+//
+// Returning file entries here is harmless: a resolved path only becomes an edge
+// if a discovered kustomization sits there, and a plain manifest file never
+// does. See ADR-001.
 func (g *DependencyGraph) extractDependencies(file *discovery.KustomizeFile) []string {
-	var deps []string
+	deps := make([]string, 0, len(file.Resources)+len(file.Bases)+len(file.Components))
 
-	// Check resources for kustomization directories
-	for _, resource := range file.Resources {
-		// Skip if it's a file (has extension)
-		if filepath.Ext(resource) != "" {
-			continue
-		}
-
-		// This might be a directory reference
-		deps = append(deps, resource)
-	}
-
-	// Add deprecated bases field
-	deps = append(deps, file.Bases...)
-
-	// Add components
-	deps = append(deps, file.Components...)
+	deps = append(deps, file.Resources...)
+	deps = append(deps, file.Bases...)      // deprecated, still supported
+	deps = append(deps, file.Components...) // components
 
 	return deps
 }
 
-// GetDependentOverlays returns all overlays that depend on the given base path
+// GetDependentOverlays returns all overlays that depend on the given base path.
+//
+// Note for callers: the reverse-lookup index is keyed by every *referenced*
+// path, not only by discovered kustomizations, so that a base the change deleted
+// still propagates to its overlays. A consequence is that a path which is not a
+// kustomization at all — a plain manifest listed under resources — also has an
+// entry. Callers must therefore pass a kustomization directory, as the analyzer
+// does; passing an arbitrary file path returns whoever references that file,
+// which is probably not what you want. Use IsBase or GetNode to check first.
 func (g *DependencyGraph) GetDependentOverlays(basePath string) []string {
 	basePath = filepath.Clean(basePath)
 
