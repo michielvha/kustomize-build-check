@@ -35,6 +35,25 @@ func (a *analyzer) GetAffectedKustomizations(
 
 	affected := make(map[string]bool)
 
+	// A kustomization whose references could not be determined is validated
+	// regardless of what changed. The tool does not know what it depends on, so
+	// it cannot know that the change missed it — and guessing "nothing" is how a
+	// broken kustomization produced a green check.
+	//
+	// Deliberately without dependent propagation: what is unknown is this file's
+	// *outgoing* references. Edges pointing at it come from other files, which
+	// parsed fine, and already propagate through the graph.
+	for _, kust := range allKustomizations {
+		if !kust.Unknown() {
+			continue
+		}
+		slog.Debug("Kustomization references are unknown, marking always affected",
+			"kustomization", kust.Dir,
+			"unparsed", kust.Unparsed,
+			"field_errors", len(kust.FieldErrs))
+		affected[filepath.Clean(kust.Dir)] = true
+	}
+
 	for _, changedFile := range changedFiles {
 		slog.Debug("Processing changed file", "file", changedFile)
 

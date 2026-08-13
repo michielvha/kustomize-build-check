@@ -47,6 +47,11 @@ func main() {
 	}
 	fmt.Printf("   Found %d kustomization files\n", len(kustomizations))
 
+	// Collect anything whose references could not be determined. These are
+	// validated regardless (the analyzer marks them always-affected); this is
+	// how the reason reaches the user instead of dying on stderr.
+	parseIssues := collectParseIssues(kustomizations)
+
 	// 3. Build dependency graph
 	fmt.Println("\n🕸️  Building dependency graph...")
 	g := graph.New()
@@ -64,6 +69,10 @@ func main() {
 		fmt.Println("   No kustomizations affected by changes")
 		// Even if no paths affected, we should report 0 builds
 		rep := reporter.New()
+		rep.PrintParseIssues(parseIssues)
+		if err := rep.AppendParseIssuesToStepSummary(parseIssues); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to write parse issues: %v\n", err)
+		}
 		if err := rep.WriteGitHubStepSummary(nil); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to write GitHub step summary: %v\n", err)
 		}
@@ -88,6 +97,10 @@ func main() {
 	// 6. Report results
 	rep := reporter.New()
 	rep.PrintResults(results)
+	rep.PrintParseIssues(parseIssues)
+	if err := rep.AppendParseIssuesToStepSummary(parseIssues); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to write parse issues: %v\n", err)
+	}
 
 	// Set GitHub Actions outputs
 	if err := rep.SetGitHubOutputs(results); err != nil {
@@ -113,6 +126,26 @@ func main() {
 		fmt.Println("\n✅ All builds successful")
 	}
 	os.Exit(0)
+}
+
+// collectParseIssues turns discovery's flags into reportable issues.
+func collectParseIssues(kustomizations []discovery.KustomizeFile) []reporter.ParseIssue {
+	var issues []reporter.ParseIssue
+	for _, kust := range kustomizations {
+		if kust.Unparsed {
+			issues = append(issues, reporter.ParseIssue{
+				Path: kust.Path, Dir: kust.Dir, Reason: kust.ParseErr.Error(),
+			})
+			continue
+		}
+		for _, fe := range kust.FieldErrs {
+			issues = append(issues, reporter.ParseIssue{
+				Path: kust.Path, Dir: kust.Dir,
+				Reason: fmt.Sprintf("field %q could not be decoded, so its references are unknown: %v", fe.Field, fe.Err),
+			})
+		}
+	}
+	return issues
 }
 
 func getEnv(key, defaultValue string) string {
