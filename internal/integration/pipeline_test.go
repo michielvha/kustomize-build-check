@@ -589,3 +589,93 @@ func TestDeletedBareBaseFailsDependentOverlay(t *testing.T) {
 		t.Fatalf("deleting a bare referenced base must fail the check, got %+v", summary)
 	}
 }
+
+// TestMalformedKustomizationIsBuiltNotDropped is the G3 guard (AC-C1).
+//
+// A kustomization this tool cannot decode used to be warned about on stderr and
+// dropped from the run, so the change that broke it exited 0 having validated
+// nothing. It is now validated regardless, and kustomize decides the outcome.
+func TestMalformedKustomizationIsBuiltNotDropped(t *testing.T) {
+	r := newRepo(t)
+	r.write("app/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\n")
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	r.commitBase()
+
+	// Break the YAML, and touch nothing else.
+	r.write("app/kustomization.yaml", "resources: [unclosed\n  : : :\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	r.assertAffected(summary, "app")
+	if summary.Failed == 0 {
+		t.Fatalf("an unparseable kustomization must not produce a green run, got %+v", summary)
+	}
+}
+
+// TestUnreadableKustomizationIsBuiltNotDropped is the AC-C8 guard.
+//
+// The read error happens before the YAML stage, so a policy covering only
+// malformed YAML would leave this silently dropped — and Phase 3 removes the
+// stderr warning that was the only trace of it.
+func TestUnreadableKustomizationIsBuiltNotDropped(t *testing.T) {
+	r := newRepo(t)
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	// A dangling symlink: present in git, unreadable on disk.
+	if err := os.Symlink("does-not-exist.yaml", filepath.Join(r.dir, "app", "kustomization.yaml")); err != nil {
+		t.Fatalf("failed to create dangling symlink: %v", err)
+	}
+	r.commitBase()
+
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  labels: {a: b}\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	r.assertAffected(summary, "app")
+	if summary.Failed == 0 {
+		t.Fatalf("an unreadable kustomization must not produce a green run, got %+v", summary)
+	}
+}
+
+// TestFieldErrorStillReachesTheBuilder is the AC-C9 guard.
+//
+// A field this tool cannot decode yields no references from that field. Treating
+// that as "no references" would silently remove the directory's whole reference
+// surface, so a change to a file it would have referenced passes unvalidated.
+func TestFieldErrorStillReachesTheBuilder(t *testing.T) {
+	r := newRepo(t)
+	// `bases` given as a mapping where a list is expected: decodable document,
+	// undecodable field.
+	r.write("app/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\nbases: {not: a-list}\n")
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	r.commitBase()
+
+	// Change only a sibling file.
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  labels: {a: b}\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	// The directory must be validated despite the tool not knowing what `bases`
+	// referenced.
+	r.assertAffected(summary, "app")
+}
+
+// TestUnparseableKustomizationKeepsItsGraphNode covers F-C2a: the retained entry
+// means dependents still propagate through the graph.
+func TestUnparseableKustomizationKeepsItsGraphNode(t *testing.T) {
+	r := newRepo(t)
+	r.write("base/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\n")
+	r.write("base/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	r.write("overlays/dev/kustomization.yaml", kustomizationHeader+"resources:\n  - ../../base\n")
+	r.commitBase()
+
+	r.write("base/kustomization.yaml", "resources: [unclosed\n  : : :\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	// base is always-affected; overlays/dev still reaches it through the graph.
+	r.assertAffected(summary, "base", "overlays/dev")
+}

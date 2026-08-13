@@ -26,6 +26,8 @@ type Reporter interface {
 	PrintResults(results []builder.BuildResult)
 	SetGitHubOutputs(results []builder.BuildResult) error
 	WriteGitHubStepSummary(results []builder.BuildResult) error
+	PrintParseIssues(issues []ParseIssue)
+	AppendParseIssuesToStepSummary(issues []ParseIssue) error
 }
 
 type reporter struct{}
@@ -211,5 +213,68 @@ func (r *reporter) WriteGitHubStepSummary(results []builder.BuildResult) error {
 		return fmt.Errorf("failed to write summary: %w", err)
 	}
 
+	return nil
+}
+
+// ParseIssue is a kustomization whose references could not be fully determined:
+// either the file could not be read or decoded at all, or an individual field
+// could not be decoded.
+//
+// These are reported so the user can act on them. The directory is validated
+// regardless (the analyzer marks it always-affected), so the build result
+// carries the verdict; this carries the explanation.
+type ParseIssue struct {
+	Path   string // the kustomization file
+	Dir    string // the directory it governs
+	Reason string // human-readable cause
+}
+
+// PrintParseIssues writes parse problems to the console.
+//
+// It is additive: it does not touch the build-result rendering or the counts,
+// and there is no new action output. A consumer that needs the detail reads this
+// or the step summary.
+func (r *reporter) PrintParseIssues(issues []ParseIssue) {
+	if len(issues) == 0 {
+		return
+	}
+
+	fmt.Printf("\n⚠️  %d kustomization(s) could not be fully parsed:\n", len(issues))
+	for _, issue := range issues {
+		fmt.Printf("   %s\n      %s\n", issue.Path, issue.Reason)
+	}
+	fmt.Println("   These directories are validated anyway, so kustomize decides the outcome.")
+}
+
+// AppendParseIssuesToStepSummary adds a section to the GitHub job summary.
+// No-ops when GITHUB_STEP_SUMMARY is unset, which is what makes local runs work.
+func (r *reporter) AppendParseIssuesToStepSummary(issues []ParseIssue) error {
+	if len(issues) == 0 {
+		return nil
+	}
+
+	summaryFile := os.Getenv("GITHUB_STEP_SUMMARY")
+	if summaryFile == "" {
+		return nil
+	}
+
+	f, err := os.OpenFile(summaryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open GITHUB_STEP_SUMMARY: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var sb strings.Builder
+	sb.WriteString("### ⚠️ Could not be fully parsed\n\n")
+	sb.WriteString("These kustomizations are validated regardless, so `kustomize build` decides ")
+	sb.WriteString("the outcome. The parse problem is shown so it can be fixed.\n\n")
+	for _, issue := range issues {
+		sb.WriteString(fmt.Sprintf("- **%s**\n  ```\n  %s\n  ```\n", issue.Path, issue.Reason))
+	}
+	sb.WriteString("\n")
+
+	if _, err := f.WriteString(sb.String()); err != nil {
+		return fmt.Errorf("failed to write summary: %w", err)
+	}
 	return nil
 }

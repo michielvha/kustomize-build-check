@@ -113,3 +113,121 @@ func TestFindAll(t *testing.T) {
 		t.Errorf("expected 3 kustomization files, got %d", len(files))
 	}
 }
+
+// TestUnreadableFileIsFlaggedNotDropped covers the read-error half of F-C1.
+// os.ReadFile fails before the YAML stage, so covering only malformed YAML would
+// leave this case silently dropped.
+func TestUnreadableFileIsFlaggedNotDropped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kustomization.yaml")
+	if err := os.Symlink(filepath.Join(dir, "does-not-exist.yaml"), path); err != nil {
+		t.Fatalf("failed to create dangling symlink: %v", err)
+	}
+
+	kf, err := New().ParseKustomization(path)
+	if err == nil {
+		t.Fatal("expected an error for an unreadable file")
+	}
+	if kf == nil {
+		t.Fatal("an unreadable file must still yield an entry, or the directory vanishes from the run")
+	}
+	if !kf.Unparsed || !kf.Unknown() {
+		t.Errorf("an unreadable file must be Unparsed and Unknown, got %+v", kf)
+	}
+	if kf.Dir != dir {
+		t.Errorf("Dir = %q, want %q", kf.Dir, dir)
+	}
+}
+
+// TestMalformedYAMLIsFlaggedNotDropped covers the parse half of F-C1.
+func TestMalformedYAMLIsFlaggedNotDropped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kustomization.yaml")
+	if err := os.WriteFile(path, []byte("resources: [unclosed\n  : : :\n"), 0o644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	kf, err := New().ParseKustomization(path)
+	if err == nil {
+		t.Fatal("expected an error for malformed YAML")
+	}
+	if kf == nil || !kf.Unparsed {
+		t.Fatalf("malformed YAML must yield a flagged entry, got %+v", kf)
+	}
+}
+
+// TestUndecodableFieldDoesNotDropFile covers F-C6: one bad field costs that
+// field's references, not the whole file.
+func TestUndecodableFieldDoesNotDropFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kustomization.yaml")
+	// `patches` as a mapping where this tool expects a list, alongside a
+	// perfectly good resources field.
+	content := "resources:\n  - deployment.yaml\nbases: {not: a-list}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	kf, err := New().ParseKustomization(path)
+	if err != nil {
+		t.Fatalf("a bad field must not fail the file: %v", err)
+	}
+	if kf.Unparsed {
+		t.Error("a bad field must not mark the whole file Unparsed")
+	}
+	if len(kf.Resources) != 1 || kf.Resources[0] != "deployment.yaml" {
+		t.Errorf("the good field must still parse, got %v", kf.Resources)
+	}
+	if len(kf.FieldErrs) != 1 || kf.FieldErrs[0].Field != "bases" {
+		t.Errorf("expected one FieldError for bases, got %+v", kf.FieldErrs)
+	}
+	if !kf.Unknown() {
+		t.Error("a field error means references are unknown, so Unknown() must be true")
+	}
+}
+
+// TestUnknownFieldsAreIgnored covers F-C5: a kustomize feature this tool does
+// not model must never fail a build.
+func TestUnknownFieldsAreIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kustomization.yaml")
+	content := "resources:\n  - deployment.yaml\nsomeFutureKustomizeFeature:\n  nested: {a: 1}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	kf, err := New().ParseKustomization(path)
+	if err != nil {
+		t.Fatalf("unknown fields must not error: %v", err)
+	}
+	if kf.Unknown() {
+		t.Errorf("unknown fields must not make the file Unknown, got %+v", kf)
+	}
+}
+
+// TestFindAllRetainsUnparseableFiles covers F-C2a: the entry survives discovery,
+// so a node exists and dependents still propagate.
+func TestFindAllRetainsUnparseableFiles(t *testing.T) {
+	root := t.TempDir()
+	good := filepath.Join(root, "good")
+	bad := filepath.Join(root, "bad")
+	for _, d := range []string{good, bad} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(good, "kustomization.yaml"), []byte("resources: []\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bad, "kustomization.yaml"), []byte("resources: [unclosed\n : : :\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	files, err := New().FindAll(root)
+	if err != nil {
+		t.Fatalf("FindAll failed: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("both files must be retained, got %d: %+v", len(files), files)
+	}
+}
