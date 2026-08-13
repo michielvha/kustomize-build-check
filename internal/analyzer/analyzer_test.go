@@ -9,6 +9,22 @@ import (
 	"github.com/michielvha/kustomize-build-check/internal/graph"
 )
 
+// kustFile builds a KustomizeFile the way discovery does, so fixtures cannot
+// drift from production. FileRefs is what the analyzer matches against; a
+// fixture setting only Resources would be an object discovery never emits.
+func kustFile(dir string, resources ...string) discovery.KustomizeFile {
+	refs := make([]discovery.Ref, 0, len(resources))
+	for _, r := range resources {
+		refs = append(refs, discovery.Ref{Field: "resources", Raw: r})
+	}
+	return discovery.KustomizeFile{
+		Path:      filepath.Join(dir, "kustomization.yaml"),
+		Dir:       dir,
+		Resources: resources,
+		FileRefs:  refs,
+	}
+}
+
 // newTestGraph builds a graph over the given kustomizations.
 func newTestGraph(t *testing.T, files []discovery.KustomizeFile) graph.Graph {
 	t.Helper()
@@ -29,11 +45,7 @@ func TestChangedResourceFileMarksKustomizationAffected(t *testing.T) {
 	t.Chdir(root)
 
 	baseDir := filepath.Join(root, "base")
-	files := []discovery.KustomizeFile{{
-		Path:      filepath.Join(baseDir, "kustomization.yaml"),
-		Dir:       baseDir,
-		Resources: []string{"deployment.yaml"},
-	}}
+	files := []discovery.KustomizeFile{kustFile(baseDir, "deployment.yaml")}
 
 	// Relative, exactly as `git diff --name-only` emits it.
 	affected := New().GetAffectedKustomizations(
@@ -51,11 +63,7 @@ func TestSiblingDirectoryIsNotMatchedByPrefix(t *testing.T) {
 	t.Chdir(root)
 
 	baseDir := filepath.Join(root, "base")
-	files := []discovery.KustomizeFile{{
-		Path:      filepath.Join(baseDir, "kustomization.yaml"),
-		Dir:       baseDir,
-		Resources: []string{"deployment.yaml"},
-	}}
+	files := []discovery.KustomizeFile{kustFile(baseDir, "deployment.yaml")}
 
 	affected := New().GetAffectedKustomizations(
 		[]string{"base-old/deployment.yaml"}, newTestGraph(t, files), files)
@@ -92,11 +100,7 @@ func TestChangedFileUnderUnrelatedKustomizationIsIgnored(t *testing.T) {
 	t.Chdir(root)
 
 	otherDir := filepath.Join(root, "other")
-	files := []discovery.KustomizeFile{{
-		Path:      filepath.Join(otherDir, "kustomization.yaml"),
-		Dir:       otherDir,
-		Resources: []string{"deployment.yaml"},
-	}}
+	files := []discovery.KustomizeFile{kustFile(otherDir, "deployment.yaml")}
 
 	affected := New().GetAffectedKustomizations(
 		[]string{"base/deployment.yaml"}, newTestGraph(t, files), files)
@@ -125,11 +129,7 @@ func TestCrossDirectorySiblingPrefixIsNotMatched(t *testing.T) {
 
 	// A kustomization at <root>/base that reaches OUT of its own directory.
 	baseDir := filepath.Join(root, "base")
-	files := []discovery.KustomizeFile{{
-		Path:      filepath.Join(baseDir, "kustomization.yaml"),
-		Dir:       baseDir,
-		Resources: []string{"../shared"},
-	}}
+	files := []discovery.KustomizeFile{kustFile(baseDir, "../shared")}
 
 	tests := []struct {
 		name        string
@@ -164,11 +164,7 @@ func TestCrossDirectoryReferenceMarksKustomizationAffected(t *testing.T) {
 	t.Chdir(root)
 
 	baseDir := filepath.Join(root, "base")
-	files := []discovery.KustomizeFile{{
-		Path:      filepath.Join(baseDir, "kustomization.yaml"),
-		Dir:       baseDir,
-		Resources: []string{"../shared/cm.yaml"},
-	}}
+	files := []discovery.KustomizeFile{kustFile(baseDir, "../shared/cm.yaml")}
 
 	affected := New().GetAffectedKustomizations(
 		[]string{"shared/cm.yaml"}, newTestGraph(t, files), files)
@@ -188,11 +184,8 @@ func TestAncestorReferenceMatchesEverythingBelowIt(t *testing.T) {
 	t.Chdir(root)
 
 	kustDir := filepath.Join(root, "apps", "web")
-	files := []discovery.KustomizeFile{{
-		Path:      filepath.Join(kustDir, "kustomization.yaml"),
-		Dir:       kustDir,
-		Resources: []string{".."}, // resolves to <root>/apps
-	}}
+	// ".." resolves to <root>/apps
+	files := []discovery.KustomizeFile{kustFile(kustDir, "..")}
 
 	affected := New().GetAffectedKustomizations(
 		[]string{"apps/other/deployment.yaml"}, newTestGraph(t, files), files)
@@ -209,11 +202,7 @@ func TestUnrelatedCrossDirectoryFileIsNotMatched(t *testing.T) {
 	t.Chdir(root)
 
 	baseDir := filepath.Join(root, "base")
-	files := []discovery.KustomizeFile{{
-		Path:      filepath.Join(baseDir, "kustomization.yaml"),
-		Dir:       baseDir,
-		Resources: []string{"../shared/cm.yaml"},
-	}}
+	files := []discovery.KustomizeFile{kustFile(baseDir, "../shared/cm.yaml")}
 
 	affected := New().GetAffectedKustomizations(
 		[]string{"elsewhere/unrelated.yaml"}, newTestGraph(t, files), files)
@@ -232,13 +221,16 @@ func TestMatchReportsTheReferenceThatCausedIt(t *testing.T) {
 
 	match, ok := (&analyzer{}).fileReferencedByKustomization(
 		filepath.Join(root, "shared", "cm.yaml"),
-		discovery.KustomizeFile{Dir: kustDir, Resources: []string{"../shared/cm.yaml"}},
+		kustFile(kustDir, "../shared/cm.yaml"),
 	)
 	if !ok {
 		t.Fatal("expected a match")
 	}
 	if match.Raw != "../shared/cm.yaml" {
 		t.Errorf("raw reference = %q, want %q", match.Raw, "../shared/cm.yaml")
+	}
+	if match.Field != "resources" {
+		t.Errorf("field = %q, want %q", match.Field, "resources")
 	}
 	if want := filepath.Join(root, "shared", "cm.yaml"); match.Resolved != want {
 		t.Errorf("resolved reference = %q, want %q", match.Resolved, want)
