@@ -1,6 +1,6 @@
 ---
-status: not-started
-status_description: "Plan authored, OQ-2 resolved by ADR-001. No implementation started."
+status: complete
+status_description: "All five phases shipped and released as 0.6.0; consumer pin bumped. Verified end to end against all five false-pass classes."
 description: "Close all four false-pass classes in impact matching across four independently shippable phases: cross-directory matching, file-vs-directory classification, unparseable-kustomization policy, and complete reference-surface parsing."
 spec: docs/specs/complete-impact-matching.spec.md
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"

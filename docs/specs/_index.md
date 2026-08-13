@@ -37,7 +37,7 @@ visible up front rather than discovered mid-build.
 
 | Spec | Status | Plan | Description |
 |------|--------|------|-------------|
-| [complete-impact-matching](./complete-impact-matching.spec.md) | Draft | [plan](../plans/complete-impact-matching.md) | Closes every false-pass surface in impact matching: cross-directory resource references, the unparsed reference fields (`patches`, `configMapGenerator`, `secretGenerator`, `helmCharts` and friends), unparseable kustomizations being silently dropped, and the `filepath.Ext` heuristic losing graph edges. Delivered in four phases. |
+| [complete-impact-matching](./complete-impact-matching.spec.md) | **Shipped** (0.6.0) | [plan](../plans/complete-impact-matching.md) | Closes every false-pass surface in impact matching: cross-directory resource references, the unparsed reference fields (`patches`, `configMapGenerator`, `secretGenerator`, `helmCharts` and friends), unparseable kustomizations being silently dropped, and the `filepath.Ext` heuristic losing graph edges. Delivered in four phases. |
 | [shallow-clone-support](./shallow-clone-support.spec.md) | Draft | [plan](../plans/shallow-clone-support.md) | The action hard-fails with a raw `fatal: bad object` when the base ref is not reachable locally, which is what `actions/checkout`'s default `fetch-depth: 1` produces. Detects the case, explains it, and degrades to validating everything rather than concluding "nothing changed". |
 | [build-timeout-handling](./build-timeout-handling.spec.md) | Draft | [plan](../plans/build-timeout-handling.md) | A timed-out build is currently indistinguishable from a broken kustomization, sending people to debug the wrong thing. Makes the cause machine-readable, adds a `build-timeout` input, and fixes a latent nil-pointer panic in the kill timer. |
 | [container-hardening](./container-hardening.spec.md) | Draft | [plan](../plans/container-hardening.md) | Moves the image off `alpine:3.23` to a Wolfi base to cut CVE surface, with behaviour parity as a hard requirement. Full distroless was considered and rejected: it needs go-git, costing 48 extra modules and a behaviour change. |
@@ -52,9 +52,13 @@ that implementation can start on any of them.
 
 ## Known gaps recorded by these specs
 
-These are documented limitations of **shipped** behaviour, not unmet requirements. The four
-false-pass rows are now owned by
-[complete-impact-matching](./complete-impact-matching.spec.md); the rest are unclaimed.
+**The five false-pass rows below are CLOSED**, shipped in 0.6.0 by
+[complete-impact-matching](./complete-impact-matching.spec.md). They are kept for the record, and
+because each names the fixture that now guards it. Verified end to end against the released code:
+every fixture where `kustomize build` fails exits non-zero, and every fixture where it succeeds
+exits zero.
+
+The remaining rows are still open and unclaimed.
 
 | Gap | Spec | Effect |
 |-----|------|--------|
