@@ -85,16 +85,22 @@ jobs:
           docker buildx build --load \
             --build-arg IMAGE_NAME=${{ steps.vega.outputs.name }} -t kbc-real .
 
-      # Mutants are derived FROM the built image by deleting a binary, rather
-      # than by patching the Dockerfile. Patching it is brittle in two ways:
-      # removing git from the package install breaks a later `git config` line so
-      # the image never builds, and the step then fails for the wrong reason; and
-      # any sed pattern silently stops matching when the Dockerfile is rewritten.
-      # Deleting from the built image is base-agnostic.
+      # Mutants are made by deleting a binary from the built image and
+      # committing the result, rather than by patching the Dockerfile or
+      # rebuilding FROM it.
+      #
+      # Patching the Dockerfile is brittle twice over: dropping git from the
+      # package install breaks a later `git config` line so the image never
+      # builds and the step fails for the wrong reason, and any sed pattern
+      # silently stops matching once the Dockerfile is rewritten. Rebuilding
+      # `FROM kbc-real` fails too, because buildx's container driver cannot see
+      # a locally loaded image. run + commit needs neither, and is base-agnostic.
       - name: A mutant missing git must FAIL the smoke test
         run: |
-          printf 'FROM kbc-real\nUSER root\nRUN rm -f /usr/bin/git /usr/local/bin/git\nUSER 1001\n' > Dockerfile.nogit
-          docker buildx build --load -f Dockerfile.nogit -t kbc-mutant-nogit .
+          docker run --name m-nogit --user root --entrypoint /bin/sh kbc-real \
+            -c 'rm -f /usr/bin/git /usr/local/bin/git'
+          docker commit m-nogit kbc-mutant-nogit >/dev/null
+          docker rm m-nogit >/dev/null
           if ./tests/e2e/smoke.sh kbc-mutant-nogit; then
             echo "::error::The smoke test passed against an image with no git. The harness is not testing anything."
             exit 1
@@ -103,8 +109,10 @@ jobs:
 
       - name: A mutant missing kustomize must FAIL the smoke test
         run: |
-          printf 'FROM kbc-real\nUSER root\nRUN rm -f /usr/local/bin/kustomize\nUSER 1001\n' > Dockerfile.nokustomize
-          docker buildx build --load -f Dockerfile.nokustomize -t kbc-mutant-nokustomize .
+          docker run --name m-nokust --user root --entrypoint /bin/sh kbc-real \
+            -c 'rm -f /usr/local/bin/kustomize'
+          docker commit m-nokust kbc-mutant-nokustomize >/dev/null
+          docker rm m-nokust >/dev/null
           if ./tests/e2e/smoke.sh kbc-mutant-nokustomize; then
             echo "::error::The smoke test passed against an image with no kustomize. The harness is not testing anything."
             exit 1
