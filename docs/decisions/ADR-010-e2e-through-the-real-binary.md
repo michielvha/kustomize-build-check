@@ -1,6 +1,6 @@
 ---
 description: "Exercise cmd/action as a built binary from internal/integration, so exit codes, INPUT_* parsing, $GITHUB_OUTPUT and stderr diagnostics have end-to-end coverage"
-status: proposed
+status: accepted
 date: 2026-08-12
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ---

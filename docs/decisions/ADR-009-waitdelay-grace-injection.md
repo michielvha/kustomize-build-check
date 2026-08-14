@@ -1,6 +1,6 @@
 ---
 description: "Keep the 5-second WaitDelay grace as the production default but hold it in an unexported field rather than a const, because a hard const makes the AC-10 wall-clock test cost 5.3s and breach AC-11."
-status: proposed
+status: accepted
 date: 2026-08-12
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ---

@@ -37,6 +37,11 @@ inputs:
     required: false
     default: 'validate-all'
 
+  build-timeout:
+    description: 'Maximum time for a single kustomize build, as a Go duration (e.g. 90s, 5m). Per build, not per run. A malformed, zero or negative value fails the run rather than silently reverting to the default'
+    required: false
+    default: '2m'
+
 outputs:
   results:
     description: 'JSON output of all build results'

@@ -1,6 +1,6 @@
 ---
 description: "Inject the build command as an unexported package field and re-exec the test binary through a TestMain env gate, because Build owns its own argv and cannot be handed a -test.run flag."
-status: proposed
+status: accepted
 date: 2026-08-12
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ---
