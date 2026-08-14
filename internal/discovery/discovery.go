@@ -87,8 +87,16 @@ func (d *discoverer) FindAll(rootDir string) ([]KustomizeFile, error) {
 			return err
 		}
 
-		// Skip hidden directories
-		if entry.IsDir() && strings.HasPrefix(entry.Name(), ".") && path != rootDir {
+		// Skip directories that cannot contain manifests we care about.
+		//
+		// Only .git is skipped, not every dot-prefixed directory. Skipping them
+		// all made discovery and impact analysis disagree about which
+		// kustomizations exist: the analyzer marks a directory by the basename of
+		// a changed kustomization file, without consulting the discovered set, so
+		// a kustomization under .deploy/ was validated in diff mode and invisible
+		// to a full scan. Two stages with different universes is how a fallback
+		// that is meant to be strictly safer ends up validating less.
+		if entry.IsDir() && entry.Name() == ".git" && path != rootDir {
 			return fs.SkipDir
 		}
 

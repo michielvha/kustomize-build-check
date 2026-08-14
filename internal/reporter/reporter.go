@@ -30,11 +30,33 @@ type Reporter interface {
 	AppendParseIssuesToStepSummary(issues []ParseIssue) error
 }
 
-type reporter struct{}
+// RunInfo carries per-run metadata the reporter publishes alongside the build
+// results. It is injected at construction rather than widened onto every method,
+// so the existing method signatures stay untouched.
+type RunInfo struct {
+	// Mode is "diff" or "full-scan": how the set of validated directories was
+	// determined. Published so a degraded run is auditable rather than silent.
+	Mode string
+	// Reason explains a non-diff mode in one line, for the step summary.
+	Reason string
+}
 
-// New creates a new Reporter
+type reporter struct {
+	run RunInfo
+}
+
+// New creates a Reporter for an ordinary diff-driven run.
 func New() Reporter {
-	return &reporter{}
+	return &reporter{run: RunInfo{Mode: "diff"}}
+}
+
+// NewWithRunInfo creates a Reporter that publishes how the run determined its
+// scope.
+func NewWithRunInfo(info RunInfo) Reporter {
+	if info.Mode == "" {
+		info.Mode = "diff"
+	}
+	return &reporter{run: info}
 }
 
 // GenerateSummary creates a summary from build results
@@ -130,6 +152,7 @@ func (r *reporter) SetGitHubOutputs(results []builder.BuildResult) error {
 		fmt.Sprintf("failed-count=%d", summary.Failed),
 		fmt.Sprintf("success-count=%d", summary.Success),
 		fmt.Sprintf("skipped-count=%d", summary.Skipped),
+		fmt.Sprintf("change-detection-mode=%s", r.run.Mode),
 		fmt.Sprintf("results=%s", resultsJSON),
 	}
 
@@ -165,7 +188,11 @@ func (r *reporter) WriteGitHubStepSummary(results []builder.BuildResult) error {
 	sb.WriteString(fmt.Sprintf("| ✅ Passed | %d |\n", summary.Success))
 	sb.WriteString(fmt.Sprintf("| ❌ Failed | %d |\n", summary.Failed))
 	sb.WriteString(fmt.Sprintf("| ⏭️ Skipped | %d |\n", summary.Skipped))
+	sb.WriteString(fmt.Sprintf("| 🔍 Change detection | %s |\n", r.run.Mode))
 	sb.WriteString("\n")
+	if r.run.Mode != "diff" && r.run.Reason != "" {
+		sb.WriteString(fmt.Sprintf("> %s\n\n", r.run.Reason))
+	}
 
 	if summary.Failed > 0 {
 		sb.WriteString("### ❌ Build Errors\n\n")

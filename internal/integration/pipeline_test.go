@@ -921,3 +921,210 @@ func TestCrossDirectoryPatchComposesWithPhase1(t *testing.T) {
 	// parses patches: neither alone is enough.
 	r.assertAffected(summary, "app")
 }
+
+// shallowClone makes a depth-1 clone of the fixture repo and returns its path.
+// The `file://` form matters: cloning from a plain path silently ignores
+// --depth, and the test would then pass for the wrong reason.
+func (r *repo) shallowClone() string {
+	r.t.Helper()
+
+	parent, err := filepath.EvalSymlinks(r.t.TempDir())
+	if err != nil {
+		r.t.Fatalf("EvalSymlinks: %v", err)
+	}
+	dst := filepath.Join(parent, "shallow")
+	cmd := exec.Command("git", "clone", "-q", "--depth", "1", "file://"+r.dir, dst)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		r.t.Fatalf("shallow clone failed: %v\n%s", err, out)
+	}
+
+	check := exec.Command("git", "rev-parse", "--is-shallow-repository")
+	check.Dir = dst
+	out, err := check.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		r.t.Fatalf("fixture is not shallow (--depth ignored): %s", out)
+	}
+	return dst
+}
+
+// runBinary builds and runs the real action binary against dir, returning its
+// stdout, its $GITHUB_OUTPUT contents and its exit code. This is the only way to
+// exercise the exit-code and INPUT_* handling that lives in main().
+func runBinary(t *testing.T, dir string, env map[string]string) (stdout, ghOutput string, code int) {
+	t.Helper()
+
+	bin := filepath.Join(t.TempDir(), "kbc")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/action")
+	build.Dir = repoRoot(t)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, out)
+	}
+
+	outFile := filepath.Join(t.TempDir(), "gh_output")
+	cmd := exec.Command(bin)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GITHUB_OUTPUT="+outFile)
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	combined, err := cmd.CombinedOutput()
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, combined)
+	}
+
+	data, readErr := os.ReadFile(outFile)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read outputs: %v", readErr)
+	}
+	return string(combined), string(data), code
+}
+
+// repoRoot locates the module root from the test's working directory.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("locate repo root: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestShallowCloneDegradesToFullScan is the headline scenario: on a depth-1
+// checkout the base ref is unreachable, and the run must validate everything
+// rather than crash with a raw git error or conclude nothing changed.
+func TestShallowCloneDegradesToFullScan(t *testing.T) {
+	requireBinary(t, "kustomize")
+
+	r := newRepo(t)
+	r.write("app/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\n")
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	r.commitBase()
+	base := r.base
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  labels: {a: b}\n")
+	r.commitChange()
+
+	shallow := r.shallowClone()
+	stdout, outputs, code := runBinary(t, shallow, map[string]string{"INPUT_BASE-REF": base})
+
+	if code != 0 {
+		t.Errorf("a shallow clone whose manifests are fine must pass, got exit %d\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "shallow clone") || !strings.Contains(stdout, "fetch-depth: 0") {
+		t.Errorf("the diagnostic must name the cause and the remedy, got:\n%s", stdout)
+	}
+	if !strings.Contains(outputs, "change-detection-mode=full-scan") {
+		t.Errorf("the degradation must be machine-visible, got outputs:\n%s", outputs)
+	}
+	if !strings.Contains(outputs, "success-count=1") {
+		t.Errorf("the full scan must actually validate the kustomization, got:\n%s", outputs)
+	}
+}
+
+// TestShallowCloneFullScanStillCatchesBreakage is the point of the fallback: a
+// degraded run must not become a green run. Nothing is diffable, so everything
+// is validated, and a broken manifest still fails.
+func TestShallowCloneFullScanStillCatchesBreakage(t *testing.T) {
+	requireBinary(t, "kustomize")
+
+	r := newRepo(t)
+	r.write("app/kustomization.yaml", kustomizationHeader+"resources:\n  - missing.yaml\n")
+	r.commitBase()
+	base := r.base
+	r.write("app/other.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: o\n")
+	r.commitChange()
+
+	shallow := r.shallowClone()
+	_, outputs, code := runBinary(t, shallow, map[string]string{"INPUT_BASE-REF": base})
+
+	if code == 0 {
+		t.Errorf("a broken manifest must fail even on the degraded path, outputs:\n%s", outputs)
+	}
+	if !strings.Contains(outputs, "change-detection-mode=full-scan") {
+		t.Errorf("expected full-scan mode, got:\n%s", outputs)
+	}
+}
+
+// TestShallowCloneFailModeWritesNoOutputs covers the opt-out and its contract:
+// the run aborts before determining what to build, so it took neither mode and
+// must publish nothing rather than claim one.
+func TestShallowCloneFailModeWritesNoOutputs(t *testing.T) {
+	r := newRepo(t)
+	r.write("app/kustomization.yaml", kustomizationHeader+"resources: []\n")
+	r.commitBase()
+	base := r.base
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	r.commitChange()
+
+	shallow := r.shallowClone()
+	stdout, outputs, code := runBinary(t, shallow, map[string]string{
+		"INPUT_BASE-REF":             base,
+		"INPUT_ON-UNRESOLVABLE-BASE": "fail",
+	})
+
+	if code != 1 {
+		t.Errorf("fail mode must exit 1, got %d\n%s", code, stdout)
+	}
+	if strings.Contains(outputs, "change-detection-mode") {
+		t.Errorf("an aborted run took neither mode and must publish none, got:\n%s", outputs)
+	}
+	if outputs != "" {
+		t.Errorf("an aborted run must write no outputs at all, got:\n%s", outputs)
+	}
+	if !strings.Contains(stdout, "fetch-depth: 0") {
+		t.Errorf("fail mode must still explain the cause, got:\n%s", stdout)
+	}
+}
+
+// TestResolvedBaseIsUnaffected pins that the fast path is untouched: a normal
+// full checkout still diffs, and still reports mode=diff.
+func TestResolvedBaseIsUnaffected(t *testing.T) {
+	requireBinary(t, "kustomize")
+
+	r := newRepo(t)
+	r.write("app/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\n")
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	r.write("untouched/kustomization.yaml", kustomizationHeader+"resources: []\n")
+	r.commitBase()
+	base := r.base
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  labels: {a: b}\n")
+	r.commitChange()
+
+	_, outputs, code := runBinary(t, r.dir, map[string]string{"INPUT_BASE-REF": base})
+
+	if code != 0 {
+		t.Errorf("expected success, got %d\noutputs:\n%s", code, outputs)
+	}
+	if !strings.Contains(outputs, "change-detection-mode=diff") {
+		t.Errorf("a resolvable base must report diff mode, got:\n%s", outputs)
+	}
+	// Only app was touched, so untouched/ must NOT be validated: this is what
+	// separates diff mode from the fallback.
+	if !strings.Contains(outputs, "success-count=1") {
+		t.Errorf("diff mode must validate only what changed, got:\n%s", outputs)
+	}
+}
+
+// TestBadRefIsNotBlamedOnShallowness covers the second probe's whole purpose:
+// recommending fetch-depth for a typo'd branch sends people to fix the wrong
+// thing.
+func TestBadRefIsNotBlamedOnShallowness(t *testing.T) {
+	requireBinary(t, "kustomize")
+
+	r := newRepo(t)
+	r.write("app/kustomization.yaml", kustomizationHeader+"resources: []\n")
+	r.commitBase()
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	r.commitChange()
+
+	stdout, outputs, _ := runBinary(t, r.dir, map[string]string{"INPUT_BASE-REF": "no-such-branch"})
+
+	if strings.Contains(stdout, "fetch-depth") && !strings.Contains(stdout, "will NOT help") {
+		t.Errorf("a bad ref in a complete repo must not be blamed on shallowness, got:\n%s", stdout)
+	}
+	if !strings.Contains(outputs, "change-detection-mode=full-scan") {
+		t.Errorf("expected the fallback, got:\n%s", outputs)
+	}
+}

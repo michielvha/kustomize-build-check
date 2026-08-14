@@ -1,6 +1,6 @@
 ## SPECIFICATION: Shallow-Clone Support (unresolvable base ref)
 **Version:** 1.0
-**Status:** Draft
+**Status:** Shipped
 **Date:** 2026-08-12
 **Type:** feature
 **Slug:** shallow-clone-support

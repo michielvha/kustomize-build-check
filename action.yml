@@ -32,6 +32,11 @@ inputs:
     required: false
     default: '.'
 
+  on-unresolvable-base:
+    description: 'What to do when base-ref cannot be resolved locally (e.g. a shallow clone): validate-all (default) validates every discovered kustomization; fail stops the run'
+    required: false
+    default: 'validate-all'
+
 outputs:
   results:
     description: 'JSON output of all build results'
@@ -44,6 +49,9 @@ outputs:
 
   skipped-count:
     description: 'Number of paths skipped because they no longer exist (deleted or renamed by the change)'
+
+  change-detection-mode:
+    description: 'How the validated set was determined: diff (normal) or full-scan (base-ref unresolvable, so everything was validated)'
 
 runs:
   using: 'docker'

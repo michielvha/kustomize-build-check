@@ -26,16 +26,59 @@ func main() {
 	enableHelm := getEnv("INPUT_ENABLE-HELM", "true") == "true"
 	failOnError := getEnv("INPUT_FAIL-ON-ERROR", "true") == "true"
 	rootDir := getEnv("INPUT_ROOT-DIR", ".")
+	onUnresolvableBase := getEnv("INPUT_ON-UNRESOLVABLE-BASE", "validate-all")
+
+	// A config typo is a pure parse with no I/O, so validate it before anything
+	// that costs work.
+	if onUnresolvableBase != "validate-all" && onUnresolvableBase != "fail" {
+		fmt.Fprintf(os.Stderr,
+			"Warning: on-unresolvable-base=%q is not recognised; using \"validate-all\". Valid values: validate-all, fail\n",
+			onUnresolvableBase)
+		onUnresolvableBase = "validate-all"
+	}
 
 	// 1. Detect changed files
 	fmt.Println("📝 Detecting changed files...")
 	gitAnalyzer := git.New()
-	changedFiles, err := gitAnalyzer.GetChangedFiles(baseRef, "HEAD")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error detecting changes: %v\n", err)
-		os.Exit(1)
+
+	// Preflight the base ref first. Diffing against a commit the repository does
+	// not have fails with a raw `fatal: bad object`, which tells the user
+	// nothing about what to do. Classifying it first lets us say something
+	// actionable, and lets us degrade instead of dying.
+	base := gitAnalyzer.ResolveBase(baseRef)
+	fullScan := false
+
+	var changedFiles []string
+	if base.State == git.BaseResolved {
+		var err error
+		changedFiles, err = gitAnalyzer.GetChangedFiles(baseRef, "HEAD")
+		if err != nil {
+			// The ref resolved but the diff still failed: nothing here can
+			// explain that better than git already has.
+			fmt.Fprintf(os.Stderr, "Error detecting changes: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("   Found %d changed files\n", len(changedFiles))
+	} else {
+		printBaseDiagnostic(base)
+		if onUnresolvableBase == "fail" {
+			// Matches today's behaviour, but with a message that names the cause
+			// and the remedy. No outputs are written, because the run aborted
+			// before determining what to build and so took neither mode.
+			fmt.Println("\n❌ Cannot determine what changed, and on-unresolvable-base=fail")
+			os.Exit(1)
+		}
+		fullScan = true
+		fmt.Println("   Falling back to validating every discovered kustomization.")
 	}
-	fmt.Printf("   Found %d changed files\n", len(changedFiles))
+
+	runInfo := reporter.RunInfo{Mode: "diff"}
+	if fullScan {
+		runInfo = reporter.RunInfo{
+			Mode:   "full-scan",
+			Reason: baseReason(base),
+		}
+	}
 
 	// 2. Discover all kustomizations
 	fmt.Println("\n🔎 Discovering kustomization files...")
@@ -62,13 +105,22 @@ func main() {
 
 	// 4. Analyze impact
 	fmt.Println("\n📊 Analyzing impact...")
-	impactAnalyzer := analyzer.New()
-	affectedPaths := impactAnalyzer.GetAffectedKustomizations(changedFiles, g, kustomizations)
+	var affectedPaths []string
+	if fullScan {
+		// Every discovered kustomization. This is a strict superset of any
+		// diff-derived set, which is the whole reason degrading is safe: it can
+		// cost time, but it cannot hide a breakage the diff would have caught.
+		affectedPaths = allDirs(kustomizations)
+		fmt.Printf("   Full scan: %d kustomization(s) to validate\n", len(affectedPaths))
+	} else {
+		impactAnalyzer := analyzer.New()
+		affectedPaths = impactAnalyzer.GetAffectedKustomizations(changedFiles, g, kustomizations)
+	}
 
 	if len(affectedPaths) == 0 {
 		fmt.Println("   No kustomizations affected by changes")
 		// Even if no paths affected, we should report 0 builds
-		rep := reporter.New()
+		rep := reporter.NewWithRunInfo(runInfo)
 		rep.PrintParseIssues(parseIssues)
 		if err := rep.AppendParseIssuesToStepSummary(parseIssues); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to write parse issues: %v\n", err)
@@ -95,7 +147,7 @@ func main() {
 	results := bldr.BuildAll(affectedPaths, enableHelm)
 
 	// 6. Report results
-	rep := reporter.New()
+	rep := reporter.NewWithRunInfo(runInfo)
 	rep.PrintResults(results)
 	rep.PrintParseIssues(parseIssues)
 	if err := rep.AppendParseIssuesToStepSummary(parseIssues); err != nil {
@@ -129,6 +181,57 @@ func main() {
 }
 
 // collectParseIssues turns discovery's flags into reportable issues.
+// printBaseDiagnostic explains an unusable base ref in terms the user can act
+// on. The two causes need different advice, which is the only reason the second
+// probe exists: recommending fetch-depth for a typo'd branch name sends people
+// to change the wrong thing.
+func printBaseDiagnostic(base git.BaseStatus) {
+	fmt.Printf("\n⚠️  Cannot diff against base ref %q\n", base.Ref)
+	switch base.State {
+	case git.BaseUnresolvableShallow:
+		fmt.Println("   The repository is a shallow clone, so that commit is not present locally.")
+		fmt.Println("   Fix: set `fetch-depth: 0` on actions/checkout.")
+	case git.BaseUnresolvableNotShallow:
+		fmt.Println("   The repository is complete, so the ref itself does not exist:")
+		fmt.Println("   a typo, a deleted branch, or a base-ref expression that evaluated unexpectedly.")
+		fmt.Println("   Note: fetch-depth will NOT help here.")
+	default:
+		fmt.Println("   The base-ref probe could not run.")
+	}
+	if base.Detail != "" {
+		fmt.Printf("   git said: %s\n", base.Detail)
+	}
+}
+
+// baseReason is the one-line explanation published in the step summary.
+func baseReason(base git.BaseStatus) string {
+	switch base.State {
+	case git.BaseUnresolvableShallow:
+		return fmt.Sprintf("Base ref %q is not present in this shallow clone, so every discovered kustomization was validated. Set `fetch-depth: 0` on actions/checkout to restore change detection.", base.Ref)
+	case git.BaseUnresolvableNotShallow:
+		return fmt.Sprintf("Base ref %q does not exist in this repository, so every discovered kustomization was validated.", base.Ref)
+	default:
+		return fmt.Sprintf("The base-ref probe could not run for %q, so every discovered kustomization was validated.", base.Ref)
+	}
+}
+
+// allDirs returns every discovered kustomization directory, de-duplicated.
+// Discovery can emit two entries for one directory (kustomization.yaml and
+// kustomization.yml), and the retained-unparseable entries add another route to
+// the same Dir.
+func allDirs(kustomizations []discovery.KustomizeFile) []string {
+	seen := make(map[string]bool, len(kustomizations))
+	dirs := make([]string, 0, len(kustomizations))
+	for _, kust := range kustomizations {
+		if seen[kust.Dir] {
+			continue
+		}
+		seen[kust.Dir] = true
+		dirs = append(dirs, kust.Dir)
+	}
+	return dirs
+}
+
 func collectParseIssues(kustomizations []discovery.KustomizeFile) []reporter.ParseIssue {
 	var issues []reporter.ParseIssue
 	for _, kust := range kustomizations {
