@@ -108,7 +108,7 @@ jobs:
               "$(count trivy-new.json)" "$(by_sev trivy-new.json CRITICAL)" "$(by_sev trivy-new.json HIGH)"
             echo
             echo "Advisory, not a gate: a new upstream advisory must not fail an unrelated pull request."
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   # Proves the smoke test can actually fail. A harness that passes against a
   # deliberately broken image is worse than no harness, because it reads as
