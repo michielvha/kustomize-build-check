@@ -54,10 +54,53 @@ jobs:
         run: ./tests/e2e/contract.sh kbc-check:${{ strategy.job-index }}
 
       - name: Base image is pinned
-        run: ./tests/e2e/assert-pinned.sh
+        run: ./tests/e2e/assert-pinned.sh --required
 
       - name: Smoke test, real binary in the real image
         run: ./tests/e2e/smoke.sh kbc-check:${{ strategy.job-index }} ${{ matrix.platform }}
+
+      # The CVE goal is measured, not asserted. Advisory rather than blocking:
+      # a new upstream advisory should not fail an unrelated pull request, and a
+      # scanner outage should not either. The number is what matters, and it is
+      # printed into the job summary so a regression is visible at review.
+      - name: Scan the built image
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: kbc-check:${{ strategy.job-index }}
+          format: table
+          output: trivy-new.txt
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: '0'
+
+      - name: Scan the currently released image, for comparison
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/michielvha/kustomize-build-check:latest
+          format: table
+          output: trivy-old.txt
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: '0'
+
+      - name: Record the before/after scan
+        continue-on-error: true
+        run: |
+          {
+            echo "## Image scan — ${{ matrix.platform }}"
+            echo
+            echo "| Image | Total findings |"
+            echo "|---|---|"
+            printf "| currently released | %s |\n" "$(grep -cE '^\| [a-z]' trivy-old.txt 2>/dev/null || echo 'n/a')"
+            printf "| this build | %s |\n" "$(grep -cE '^\| [a-z]' trivy-new.txt 2>/dev/null || echo 'n/a')"
+            echo
+            echo "<details><summary>this build</summary>"
+            echo
+            echo '```'
+            head -60 trivy-new.txt 2>/dev/null || echo "scan unavailable"
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Proves the smoke test can actually fail. A harness that passes against a
   # deliberately broken image is worse than no harness, because it reads as
