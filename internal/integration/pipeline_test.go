@@ -1128,3 +1128,112 @@ func TestBadRefIsNotBlamedOnShallowness(t *testing.T) {
 		t.Errorf("expected the fallback, got:\n%s", outputs)
 	}
 }
+
+// TestBuildTimeoutInputIsReadByTheBinary is the wiring guard. This repo already
+// declares an input the binary never reads (kustomize-version), so declaring one
+// proves nothing: this runs the built binary and compares behaviour at two
+// values of the input.
+func TestBuildTimeoutInputIsReadByTheBinary(t *testing.T) {
+	requireBinary(t, "kustomize")
+
+	r := newRepo(t)
+	r.write("app/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\n")
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	r.commitBase()
+	base := r.base
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  labels: {a: b}\n")
+	r.commitChange()
+
+	t.Run("a generous limit passes", func(t *testing.T) {
+		_, outputs, code := runBinary(t, r.dir, map[string]string{
+			"INPUT_BASE-REF":      base,
+			"INPUT_BUILD-TIMEOUT": "2m",
+		})
+		if code != 0 {
+			t.Errorf("expected success, got %d\n%s", code, outputs)
+		}
+	})
+
+	t.Run("an impossible limit times out", func(t *testing.T) {
+		stdout, _, code := runBinary(t, r.dir, map[string]string{
+			"INPUT_BASE-REF":      base,
+			"INPUT_BUILD-TIMEOUT": "1ms",
+		})
+		if code == 0 {
+			t.Errorf("a 1ms limit must time out, got exit 0\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "Timed out") {
+			t.Errorf("the report must say it timed out, got:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "build-timeout") {
+			t.Errorf("the report must name the input that changes the limit, got:\n%s", stdout)
+		}
+	})
+
+	t.Run("a malformed value fails fast, before any build", func(t *testing.T) {
+		stdout, _, code := runBinary(t, r.dir, map[string]string{
+			"INPUT_BASE-REF":      base,
+			"INPUT_BUILD-TIMEOUT": "2 minutes",
+		})
+		if code != 1 {
+			t.Errorf("a malformed duration must exit 1, got %d\n%s", code, stdout)
+		}
+		if !strings.Contains(stdout, "not a valid duration") {
+			t.Errorf("the error must name the problem, got:\n%s", stdout)
+		}
+		if strings.Contains(stdout, "Detecting changed files") {
+			t.Errorf("validation must happen before any work, got:\n%s", stdout)
+		}
+	})
+
+	t.Run("a zero value is rejected rather than silently defaulted", func(t *testing.T) {
+		stdout, _, code := runBinary(t, r.dir, map[string]string{
+			"INPUT_BASE-REF":      base,
+			"INPUT_BUILD-TIMEOUT": "0s",
+		})
+		if code != 1 {
+			t.Errorf("zero must be rejected, got %d\n%s", code, stdout)
+		}
+	})
+}
+
+// TestTimedOutBuildIsNotListedAsBuildError covers the reporting contract: a
+// timeout is a failure, but rendering it under "Build Errors" would tell the
+// user their manifest is broken when it is merely slow.
+func TestTimedOutBuildIsNotListedAsBuildError(t *testing.T) {
+	requireBinary(t, "kustomize")
+
+	r := newRepo(t)
+	r.write("app/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\n")
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	r.commitBase()
+	base := r.base
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  labels: {a: b}\n")
+	r.commitChange()
+
+	summaryFile := filepath.Join(t.TempDir(), "summary.md")
+	stdout, _, _ := runBinary(t, r.dir, map[string]string{
+		"INPUT_BASE-REF":      base,
+		"INPUT_BUILD-TIMEOUT": "1ms",
+		"GITHUB_STEP_SUMMARY": summaryFile,
+	})
+
+	data, err := os.ReadFile(summaryFile)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	got := string(data)
+
+	if !strings.Contains(got, "### ⏱️ Timed Out") {
+		t.Errorf("the summary must have a timeout section, got:\n%s", got)
+	}
+	if _, errSection, found := strings.Cut(got, "### ❌ Build Errors"); found {
+		errSection, _, _ = strings.Cut(errSection, "### ")
+		if strings.Contains(errSection, "app") {
+			t.Errorf("a timeout must not be rendered as a build error:\n%s", errSection)
+		}
+	}
+	if !strings.Contains(stdout, "⏱️") {
+		t.Errorf("the console must distinguish a timeout, got:\n%s", stdout)
+	}
+}

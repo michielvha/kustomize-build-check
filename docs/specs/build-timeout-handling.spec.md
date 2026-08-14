@@ -1,6 +1,6 @@
 ## SPECIFICATION: Build Timeout Handling (a killed build must be diagnosable, and the limit must be configurable)
 **Version:** 1.0
-**Status:** Draft
+**Status:** Shipped
 **Date:** 2026-08-12
 **Type:** feature
 **Slug:** build-timeout-handling

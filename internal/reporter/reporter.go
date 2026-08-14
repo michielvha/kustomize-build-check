@@ -17,7 +17,11 @@ type Summary struct {
 	Success int
 	Failed  int
 	Skipped int
-	Results []builder.BuildResult
+	// TimedOut is a sub-count of Failed, not a fourth category. A timed-out
+	// build was never validated, so it must keep failing the run; it is broken
+	// out only so the report can say *why* it failed.
+	TimedOut int
+	Results  []builder.BuildResult
 }
 
 // Reporter formats and outputs build results
@@ -74,6 +78,9 @@ func (r *reporter) GenerateSummary(results []builder.BuildResult) Summary {
 			summary.Success++
 		default:
 			summary.Failed++
+			if result.TimedOut {
+				summary.TimedOut++
+			}
 		}
 	}
 
@@ -94,6 +101,11 @@ func (r *reporter) PrintResults(results []builder.BuildResult) {
 		switch {
 		case result.Skipped:
 			fmt.Printf("⏭️  %s - Skipped (%s)\n", result.Path, result.SkipReason)
+		case result.TimedOut:
+			fmt.Printf("⏱️  %s - Timed out after %.2fs (limit %s)\n",
+				result.Path, result.Duration.Seconds(), result.TimeoutLimit)
+			fmt.Println("   This build was not validated. If it is legitimately slow, raise the")
+			fmt.Println("   `build-timeout` input; otherwise it is likely stuck.")
 		case result.Success:
 			fmt.Printf("✅ %s - Build successful (%.2fs)\n", result.Path, result.Duration.Seconds())
 		default:
@@ -118,6 +130,9 @@ func (r *reporter) PrintResults(results []builder.BuildResult) {
 	fmt.Println(strings.Repeat("=", 80))
 	fmt.Printf("\nSummary: %d total, %d successful, %d failed, %d skipped\n",
 		summary.Total, summary.Success, summary.Failed, summary.Skipped)
+	if summary.TimedOut > 0 {
+		fmt.Printf("         %d of the %d failures timed out\n", summary.TimedOut, summary.Failed)
+	}
 }
 
 // SetGitHubOutputs sets GitHub Actions output variables
@@ -188,6 +203,9 @@ func (r *reporter) WriteGitHubStepSummary(results []builder.BuildResult) error {
 	sb.WriteString(fmt.Sprintf("| ✅ Passed | %d |\n", summary.Success))
 	sb.WriteString(fmt.Sprintf("| ❌ Failed | %d |\n", summary.Failed))
 	sb.WriteString(fmt.Sprintf("| ⏭️ Skipped | %d |\n", summary.Skipped))
+	if summary.TimedOut > 0 {
+		sb.WriteString(fmt.Sprintf("| ⏱️ Timed out | %d (of the %d failures) |\n", summary.TimedOut, summary.Failed))
+	}
 	sb.WriteString(fmt.Sprintf("| 🔍 Change detection | %s |\n", r.run.Mode))
 	sb.WriteString("\n")
 	if r.run.Mode != "diff" && r.run.Reason != "" {
@@ -197,7 +215,7 @@ func (r *reporter) WriteGitHubStepSummary(results []builder.BuildResult) error {
 	if summary.Failed > 0 {
 		sb.WriteString("### ❌ Build Errors\n\n")
 		for _, result := range results {
-			if !result.Success && !result.Skipped {
+			if !result.Success && !result.Skipped && !result.TimedOut {
 				sb.WriteString(fmt.Sprintf("- **%s**\n", result.Path))
 				sb.WriteString("```\n")
 				// Limit error output to avoid blowing up the summary
@@ -209,6 +227,19 @@ func (r *reporter) WriteGitHubStepSummary(results []builder.BuildResult) error {
 					sb.WriteString(result.Error)
 				}
 				sb.WriteString("\n```\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	if summary.TimedOut > 0 {
+		sb.WriteString("### ⏱️ Timed Out\n\n")
+		sb.WriteString("These builds were killed on the time limit, so they were **not validated**. ")
+		sb.WriteString("If a build is legitimately slow, raise the `build-timeout` input.\n\n")
+		for _, result := range results {
+			if result.TimedOut {
+				sb.WriteString(fmt.Sprintf("- **%s** — %.2fs (limit %s)\n",
+					result.Path, result.Duration.Seconds(), result.TimeoutLimit))
 			}
 		}
 		sb.WriteString("\n")

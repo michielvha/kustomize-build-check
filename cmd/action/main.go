@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/michielvha/kustomize-build-check/internal/analyzer"
 	"github.com/michielvha/kustomize-build-check/internal/builder"
@@ -27,6 +28,14 @@ func main() {
 	failOnError := getEnv("INPUT_FAIL-ON-ERROR", "true") == "true"
 	rootDir := getEnv("INPUT_ROOT-DIR", ".")
 	onUnresolvableBase := getEnv("INPUT_ON-UNRESOLVABLE-BASE", "validate-all")
+
+	// Parse the timeout first: it is a pure parse with no I/O, so a config typo
+	// should not first pay for git work before being told it is a typo.
+	buildTimeout, err := parseBuildTimeout(getEnv("INPUT_BUILD-TIMEOUT", "2m"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// A config typo is a pure parse with no I/O, so validate it before anything
 	// that costs work.
@@ -143,7 +152,7 @@ func main() {
 
 	// 5. Build affected kustomizations
 	fmt.Println("\n🔨 Running kustomize build...")
-	bldr := builder.New()
+	bldr := builder.NewWithTimeout(buildTimeout)
 	results := bldr.BuildAll(affectedPaths, enableHelm)
 
 	// 6. Report results
@@ -201,6 +210,22 @@ func printBaseDiagnostic(base git.BaseStatus) {
 	if base.Detail != "" {
 		fmt.Printf("   git said: %s\n", base.Detail)
 	}
+}
+
+// parseBuildTimeout validates the build-timeout input.
+//
+// A malformed, zero or negative value fails fast rather than silently falling
+// back to the default: a limit the user thinks they set but did not is worse
+// than being told it is wrong.
+func parseBuildTimeout(raw string) (time.Duration, error) {
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("build-timeout %q is not a valid duration (e.g. 90s, 5m): %w", raw, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("build-timeout must be positive, got %q", raw)
+	}
+	return d, nil
 }
 
 // baseReason is the one-line explanation published in the step summary.

@@ -1,6 +1,6 @@
 ---
 description: "Carry the change-detection mode into the reporter by constructor injection (reporter.New(RunInfo)) rather than by widening SetGitHubOutputs and WriteGitHubStepSummary"
-status: proposed
+status: accepted
 date: 2026-08-12
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ---

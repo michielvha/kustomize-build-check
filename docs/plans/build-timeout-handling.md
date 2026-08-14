@@ -1,5 +1,5 @@
 ---
-status: not-started
+status: complete
 status_description: "Plan authored. Two live defects reproduced and two ADRs proposed. No implementation started."
 description: "Make a timed-out kustomize build diagnosable instead of misdiagnosed, make the limit a real wall-clock bound via context + WaitDelay, expose it as the build-timeout input in both action.yml files, and add the first tests the timeout path has ever had."
 spec: docs/specs/build-timeout-handling.spec.md
