@@ -1,6 +1,6 @@
 ---
 status: complete
-status_description: "All five phases shipped and released as 0.6.0; consumer pin bumped. Verified end to end in the released container against G1, G2, G3, G4, G5 and the bare-base variant. A post-ship review then hardened three decorative tests, added the missing AC-E7/AC-A8/console tests, closed an F-C6 hole where a wrong-shaped field value was swallowed, and made CI install helm so the helmCharts scenario stops skipping."
+status_description: "All five phases shipped and released; consumer pin bumped. Verified end to end in the released container against every false-pass class. A post-ship review hardened three decorative tests, added the missing AC-E7/AC-A8/console tests, closed an F-C6 hole where a wrong-shaped field value was swallowed, and made CI install helm and fail on any skip. The Phase 4 E2E gaps are now closed too: all 11 reference surfaces have an end-to-end scenario, plus the AC-D11/D12/D13 guards."
 description: "Close all four false-pass classes in impact matching across four independently shippable phases: cross-directory matching, file-vs-directory classification, unparseable-kustomization policy, and complete reference-surface parsing."
 spec: docs/specs/complete-impact-matching.spec.md
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"

@@ -350,3 +350,49 @@ func TestGetAllDependentsNoCycles(t *testing.T) {
 		t.Errorf("cycle handling failed, got too many dependents: %d", len(dependents))
 	}
 }
+
+// TestPatchFileCreatesNoGraphEdge is the AC-D13 guard: the reference surfaces
+// added in Phase 4 feed file matching only. They must never become graph edges,
+// because an edge means "changing this propagates to my dependents", which is
+// true of a base and false of a patch.
+//
+// The guard is structural: extractDependencies reads Resources, Bases and
+// Components, and never FileRefs. This test pins that, so a later change that
+// tries to "unify" the two lists fails loudly.
+func TestPatchFileCreatesNoGraphEdge(t *testing.T) {
+	root := t.TempDir()
+	app := filepath.Join(root, "app")
+
+	files := []discovery.KustomizeFile{{
+		Path: filepath.Join(app, "kustomization.yaml"),
+		Dir:  app,
+		// No Resources at all: every reference here arrived through a Phase 4
+		// surface, so none of them may produce an edge.
+		FileRefs: []discovery.Ref{
+			{Field: "patches.path", Raw: "patch.yaml"},
+			{Field: "configMapGenerator.files", Raw: "data.txt"},
+			{Field: "helmCharts.valuesFile", Raw: "values.yaml"},
+		},
+	}}
+
+	g := New().(*DependencyGraph)
+	if err := g.Build(files); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	for _, ref := range []string{"patch.yaml", "data.txt", "values.yaml"} {
+		p := filepath.Join(app, ref)
+		if g.IsBase(p) {
+			t.Errorf("%s came from a file-reference surface and must never be a base", ref)
+		}
+		if got := g.GetDependentOverlays(p); len(got) != 0 {
+			t.Errorf("%s must have no dependents, got %v", ref, got)
+		}
+	}
+
+	// And the node itself has no dependencies recorded, since FileRefs is not a
+	// dependency source.
+	if node := g.GetNode(app); node == nil || len(node.Dependencies) != 0 {
+		t.Errorf("file references must not become dependencies, got %+v", node)
+	}
+}

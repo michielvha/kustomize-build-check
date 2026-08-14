@@ -731,6 +731,70 @@ func TestEveryReferenceSurfaceMarksItsDirectory(t *testing.T) {
 			editTo:    "k=changed\n",
 		},
 		{
+			name:      "configMapGenerator envs",
+			kustomize: kustomizationHeader + "configMapGenerator:\n  - name: cm\n    envs:\n      - cm.env\n",
+			extra:     map[string]string{"cm.env": "k=v\n"},
+			editFile:  "app/cm.env",
+			editTo:    "k=changed\n",
+		},
+		{
+			name:      "secretGenerator files",
+			kustomize: kustomizationHeader + "secretGenerator:\n  - name: s\n    files:\n      - secret.txt\n",
+			extra:     map[string]string{"secret.txt": "topsecret\n"},
+			editFile:  "app/secret.txt",
+			editTo:    "rotated\n",
+		},
+		{
+			name: "generator alias key=path",
+			// The reference is written "alias.txt=real.txt"; only real.txt exists.
+			// A parser that failed to split would look for a file literally named
+			// "alias.txt=real.txt" and match nothing.
+			kustomize: kustomizationHeader + "configMapGenerator:\n  - name: cm\n    files:\n      - alias.txt=real.txt\n",
+			extra:     map[string]string{"real.txt": "hello\n"},
+			editFile:  "app/real.txt",
+			editTo:    "changed\n",
+		},
+		{
+			name:      "patchesJson6902",
+			kustomize: kustomizationHeader + "resources:\n  - deployment.yaml\npatchesJson6902:\n  - target: {group: apps, version: v1, kind: Deployment, name: app}\n    path: j.yaml\n",
+			extra: map[string]string{
+				"deployment.yaml": deployment,
+				"j.yaml":          "- op: replace\n  path: /spec/replicas\n  value: 3\n",
+			},
+			editFile: "app/j.yaml",
+			editTo:   "- op: replace\n  path: /spec/replicas\n  value: 7\n",
+		},
+		{
+			name:      "crds",
+			kustomize: kustomizationHeader + "resources:\n  - cm.yaml\ncrds:\n  - crd.json\n",
+			extra: map[string]string{
+				"cm.yaml":  "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n",
+				"crd.json": `{"definitions":{"com.example.v1.MyKind":{"type":"object","x-kubernetes-group-version-kind":[{"group":"example.com","kind":"MyKind","version":"v1"}]}}}`,
+			},
+			editFile: "app/crd.json",
+			editTo:   `{"definitions":{"com.example.v2.MyKind":{"type":"object","x-kubernetes-group-version-kind":[{"group":"example.com","kind":"MyKind","version":"v2"}]}}}`,
+		},
+		{
+			name:      "configurations",
+			kustomize: kustomizationHeader + "resources:\n  - cm.yaml\nconfigurations:\n  - nameref.yaml\n",
+			extra: map[string]string{
+				"cm.yaml":      "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n",
+				"nameref.yaml": "nameReference:\n- kind: ConfigMap\n  fieldSpecs:\n  - path: spec/name\n    kind: Deployment\n",
+			},
+			editFile: "app/nameref.yaml",
+			editTo:   "nameReference:\n- kind: ConfigMap\n  fieldSpecs:\n  - path: spec/other\n    kind: Deployment\n",
+		},
+		{
+			name:      "openapi path",
+			kustomize: kustomizationHeader + "resources:\n  - cm.yaml\nopenapi:\n  path: schema.json\n",
+			extra: map[string]string{
+				"cm.yaml":     "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n",
+				"schema.json": `{"definitions":{}}`,
+			},
+			editFile: "app/schema.json",
+			editTo:   `{"definitions":{"x":{"type":"object"}}}`,
+		},
+		{
 			name:      "patchesStrategicMerge",
 			kustomize: kustomizationHeader + "resources:\n  - deployment.yaml\npatchesStrategicMerge:\n  - legacy.yaml\n",
 			extra: map[string]string{
@@ -798,4 +862,62 @@ func TestHelmValuesFileMarksItsDirectory(t *testing.T) {
 	if summary.Failed != 0 {
 		t.Errorf("expected no failures, got %d\n     %s", summary.Failed, paths(summary))
 	}
+}
+
+// TestReferenceSurfacesDoNotOverMatch is the AC-D12 guard, and the direction the
+// Phase 4 suite was missing entirely: widening what counts as a reference must
+// not make one directory's files mark a *different* directory.
+//
+// The fixture is deliberately adversarial. Two sibling directories hold files
+// with identical names, and each kustomization references only its own. A
+// resolution bug that dropped the directory component — matching on basename, or
+// resolving against the wrong root — would mark both, and containment assertions
+// would not notice. The assertion is set equality.
+func TestReferenceSurfacesDoNotOverMatch(t *testing.T) {
+	r := newRepo(t)
+	for _, dir := range []string{"alpha", "beta"} {
+		r.write(dir+"/kustomization.yaml", kustomizationHeader+
+			"resources:\n  - deployment.yaml\npatches:\n  - path: patch.yaml\nconfigMapGenerator:\n  - name: cm\n    files:\n      - data.txt\n")
+		r.write(dir+"/deployment.yaml",
+			"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 1\n  selector:\n    matchLabels: {app: a}\n  template:\n    metadata:\n      labels: {app: a}\n    spec:\n      containers:\n        - name: c\n          image: nginx\n")
+		r.write(dir+"/patch.yaml", "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 2\n")
+		r.write(dir+"/data.txt", "hello\n")
+	}
+	r.commitBase()
+
+	// Touch only alpha's files, across three different reference surfaces.
+	r.write("alpha/patch.yaml", "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 9\n")
+	r.write("alpha/data.txt", "changed\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	// alpha only. beta has identically named files and must not be dragged in.
+	r.assertAffected(summary, "alpha")
+	if summary.Failed != 0 {
+		t.Errorf("expected no failures, got %d\n     %s", summary.Failed, paths(summary))
+	}
+}
+
+// TestCrossDirectoryPatchComposesWithPhase1 is the AC-D11 guard: the new
+// reference surfaces resolve by the same rules as `resources`, including the
+// cross-directory case Phase 1 unlocked. A patch held outside the kustomization
+// directory must mark it when that patch changes.
+func TestCrossDirectoryPatchComposesWithPhase1(t *testing.T) {
+	r := newRepo(t)
+	r.write("shared/patch.yaml", "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 2\n")
+	r.write("app/deployment.yaml",
+		"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 1\n  selector:\n    matchLabels: {app: a}\n  template:\n    metadata:\n      labels: {app: a}\n    spec:\n      containers:\n        - name: c\n          image: nginx\n")
+	r.write("app/kustomization.yaml", kustomizationHeader+
+		"resources:\n  - deployment.yaml\npatches:\n  - path: ../shared/patch.yaml\n")
+	r.commitBase()
+
+	r.write("shared/patch.yaml", "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 9\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	// Reached only because Phase 1 removed the containment guard AND Phase 4
+	// parses patches: neither alone is enough.
+	r.assertAffected(summary, "app")
 }
