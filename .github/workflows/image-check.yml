@@ -1,0 +1,120 @@
+name: Image Check
+
+# Runs on EVERY pull request, deliberately without a paths filter.
+#
+# The point of this gate is to give behavioural changes a pull-request-time check
+# that runs the real binary inside the real image. Filtering to Dockerfile and
+# tests/e2e would mean it never fires on the PRs that actually change behaviour,
+# which is the opposite of why it exists. The goreleaser + buildx cost on every
+# PR is the price of the gate existing at all.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image-check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # The image COPYs a prebuilt binary; it does not compile in-image.
+      - name: Build binaries
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          args: build --snapshot --clean
+
+      - name: Read the workload name from the constitution
+        id: vega
+        run: echo "name=$(grep -E '^\s+workload_name:' vega.yaml | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+
+      - name: Build the image
+        run: |
+          docker buildx build --load \
+            --platform ${{ matrix.platform }} \
+            --build-arg IMAGE_NAME=${{ steps.vega.outputs.name }} \
+            -t kbc-check:${{ strategy.job-index }} .
+
+      - name: Image contract
+        run: ./tests/e2e/contract.sh kbc-check:${{ strategy.job-index }}
+
+      - name: Base image is pinned
+        run: ./tests/e2e/assert-pinned.sh
+
+      - name: Smoke test, real binary in the real image
+        run: ./tests/e2e/smoke.sh kbc-check:${{ strategy.job-index }} ${{ matrix.platform }}
+
+  # Proves the smoke test can actually fail. A harness that passes against a
+  # deliberately broken image is worse than no harness, because it reads as
+  # coverage.
+  harness-selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build binaries
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          args: build --snapshot --clean
+
+      - name: Read the workload name from the constitution
+        id: vega
+        run: echo "name=$(grep -E '^\s+workload_name:' vega.yaml | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+
+      - name: Build the real image once
+        run: |
+          docker buildx build --load \
+            --build-arg IMAGE_NAME=${{ steps.vega.outputs.name }} -t kbc-real .
+
+      # Mutants are made by deleting a binary from the built image and
+      # committing the result, rather than by patching the Dockerfile or
+      # rebuilding FROM it.
+      #
+      # Patching the Dockerfile is brittle twice over: dropping git from the
+      # package install breaks a later `git config` line so the image never
+      # builds and the step fails for the wrong reason, and any sed pattern
+      # silently stops matching once the Dockerfile is rewritten. Rebuilding
+      # `FROM kbc-real` fails too, because buildx's container driver cannot see
+      # a locally loaded image. run + commit needs neither, and is base-agnostic.
+      - name: A mutant missing git must FAIL the smoke test
+        run: |
+          docker run --name m-nogit --user root --entrypoint /bin/sh kbc-real \
+            -c 'rm -f /usr/bin/git /usr/local/bin/git'
+          docker commit m-nogit kbc-mutant-nogit >/dev/null
+          docker rm m-nogit >/dev/null
+          if ./tests/e2e/smoke.sh kbc-mutant-nogit; then
+            echo "::error::The smoke test passed against an image with no git. The harness is not testing anything."
+            exit 1
+          fi
+          echo "ok: the harness caught the missing-git mutant"
+
+      - name: A mutant missing kustomize must FAIL the smoke test
+        run: |
+          docker run --name m-nokust --user root --entrypoint /bin/sh kbc-real \
+            -c 'rm -f /usr/local/bin/kustomize'
+          docker commit m-nokust kbc-mutant-nokustomize >/dev/null
+          docker rm m-nokust >/dev/null
+          if ./tests/e2e/smoke.sh kbc-mutant-nokustomize; then
+            echo "::error::The smoke test passed against an image with no kustomize. The harness is not testing anything."
+            exit 1
+          fi
+          echo "ok: the harness caught the missing-kustomize mutant"
