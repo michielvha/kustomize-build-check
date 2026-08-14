@@ -134,14 +134,14 @@ func collectParseIssues(kustomizations []discovery.KustomizeFile) []reporter.Par
 	for _, kust := range kustomizations {
 		if kust.Unparsed {
 			issues = append(issues, reporter.ParseIssue{
-				Path: kust.Path, Dir: kust.Dir, Reason: kust.ParseErr.Error(),
+				Path: kust.Path, Reason: kust.ParseErr.Error(),
 			})
 			continue
 		}
 		for _, fe := range kust.FieldErrs {
 			issues = append(issues, reporter.ParseIssue{
-				Path: kust.Path, Dir: kust.Dir,
-				Reason: fmt.Sprintf("field %q could not be decoded, so its references are unknown: %v", fe.Field, fe.Err),
+				Path:   kust.Path,
+				Reason: fmt.Sprintf("%s — references from this field are unknown", fe.Error()),
 			})
 		}
 	}

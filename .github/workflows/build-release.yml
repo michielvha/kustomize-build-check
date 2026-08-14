@@ -40,21 +40,41 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # 3: Install kustomize, required by the integration tests.
-      # Keep KUSTOMIZE_VERSION in sync with the Dockerfile so the tests run
-      # against the same version the released image ships.
-      - name: Install kustomize
+      # 3: Install kustomize AND helm, both required by the integration tests.
+      # Keep these in sync with the Dockerfile so the tests run against the same
+      # versions the released image ships.
+      #
+      # helm is not optional here: the integration harness builds with
+      # --enable-helm, and the helmCharts values-file scenario skips itself
+      # without it. A skipped test still reports `ok`, which is precisely the
+      # silent-skip CLAUDE.md forbids.
+      - name: Install kustomize and helm
         env:
           KUSTOMIZE_VERSION: v5.8.1
+          HELM_VERSION: v4.2.3
         run: |
           curl -sfL -o /tmp/kustomize.tar.gz \
             "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
           sudo tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin
           kustomize version
 
-      # 4: Run tests before tagging or releasing anything
+          curl -sfL -o /tmp/helm.tar.gz \
+            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          tar -xzf /tmp/helm.tar.gz -C /tmp
+          sudo mv /tmp/linux-amd64/helm /usr/local/bin/helm
+          helm version --short
+
+      # 4: Run tests before tagging or releasing anything.
+      # Fail if any test skipped: a silent skip means a scenario CI believes it
+      # covers was never actually run (CLAUDE.md, NF-09).
       - name: Run tests
-        run: go test ./... -count=1
+        run: |
+          go test ./... -count=1 -v 2>&1 | tee /tmp/test.log
+          if grep -q '^--- SKIP' /tmp/test.log; then
+            echo "::error::A test skipped. CI must run every scenario; see CLAUDE.md."
+            grep '^--- SKIP' /tmp/test.log
+            exit 1
+          fi
 
       # 5: Call our custom `GitVersion action` to tag the repo
       - name: Tag with GitVersion

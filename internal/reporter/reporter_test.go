@@ -1,6 +1,7 @@
 package reporter
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,7 +101,7 @@ func TestParseIssuesAreNotBuildErrors(t *testing.T) {
 	t.Setenv("GITHUB_STEP_SUMMARY", summaryFile)
 
 	rep := New()
-	issues := []ParseIssue{{Path: "/repo/app/kustomization.yaml", Dir: "/repo/app", Reason: "failed to parse YAML: boom"}}
+	issues := []ParseIssue{{Path: "/repo/app/kustomization.yaml", Reason: "failed to parse YAML: boom"}}
 
 	if err := rep.WriteGitHubStepSummary(sampleResults()); err != nil {
 		t.Fatalf("WriteGitHubStepSummary failed: %v", err)
@@ -159,5 +160,51 @@ func TestParseIssuesAddNoOutputKey(t *testing.T) {
 	}
 	if strings.Contains(got, "parse") {
 		t.Errorf("this phase must add no parse-related output key, got:\n%s", got)
+	}
+}
+
+// TestPrintParseIssues covers the console half of AC-C2, which had no test at
+// all: a parse problem must be visible in the run output, not only in the step
+// summary (which is absent on a local run) and not only on stderr.
+func TestPrintParseIssues(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	stdout := os.Stdout
+	os.Stdout = w
+	New().PrintParseIssues([]ParseIssue{{
+		Path:   "/repo/app/kustomization.yaml",
+		Reason: "failed to parse YAML: boom",
+	}})
+	_ = w.Close()
+	os.Stdout = stdout
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{"/repo/app/kustomization.yaml", "failed to parse YAML: boom"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("console output must contain %q, got:\n%s", want, got)
+		}
+	}
+}
+
+// TestPrintParseIssuesSilentWhenNone keeps the happy path quiet.
+func TestPrintParseIssuesSilentWhenNone(t *testing.T) {
+	r, w, _ := os.Pipe()
+	stdout := os.Stdout
+	os.Stdout = w
+	New().PrintParseIssues(nil)
+	_ = w.Close()
+	os.Stdout = stdout
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	if buf.Len() != 0 {
+		t.Errorf("no parse issues must print nothing, got:\n%s", buf.String())
 	}
 }

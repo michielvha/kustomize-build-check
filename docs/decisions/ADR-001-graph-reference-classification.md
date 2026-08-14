@@ -1,6 +1,6 @@
 ---
 description: "Classify a resources entry as a directory reference by asking whether a kustomization was discovered there, not by stat and not by filename extension"
-status: proposed
+status: accepted
 date: 2026-08-12
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ---
@@ -57,6 +57,11 @@ path. The extension test is therefore not a classifier at all, it is a pre-filte
 of a classifier that already exists and is already exact. Its only observable effect is to
 drop true positives. The other consumer, `Node.Dependencies`, is read solely by
 `DependencyGraph.String()` (`graph.go:211-216`) — a debug rendering with no in-repo caller.
+
+> **Superseded in part (2026-08-13).** This ADR's "Negative / accepted" section recorded the
+> bare-deleted-base gap as unfixed, and stated that closing it needed a pre-change-tree graph. That
+> was wrong: the reverse edge is now recorded whether or not a node was discovered at the resolved
+> path, which closes it in three lines. See the plan's OQ-6 and `graph.go`.
 
 ## Decision
 
