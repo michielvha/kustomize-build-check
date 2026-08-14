@@ -68,8 +68,8 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: kbc-check:${{ strategy.job-index }}
-          format: table
-          output: trivy-new.txt
+          format: json
+          output: trivy-new.json
           severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: '0'
 
@@ -78,28 +78,36 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/michielvha/kustomize-build-check:latest
-          format: table
-          output: trivy-old.txt
+          format: json
+          output: trivy-old.json
           severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: '0'
 
+      # Counted from JSON rather than by grepping the table: a table grep silently
+      # produces a wrong number when the format shifts, and a wrong number is
+      # worse than no number when the whole point is to measure.
       - name: Record the before/after scan
         continue-on-error: true
         run: |
+          count() {
+            [ -f "$1" ] || { echo "n/a"; return; }
+            jq '[.Results[]?.Vulnerabilities // [] | length] | add // 0' "$1" 2>/dev/null || echo "n/a"
+          }
+          by_sev() {
+            [ -f "$1" ] || { echo "n/a"; return; }
+            jq -r --arg s "$2" '[.Results[]?.Vulnerabilities // [] | .[] | select(.Severity==$s)] | length' "$1" 2>/dev/null || echo "n/a"
+          }
           {
             echo "## Image scan — ${{ matrix.platform }}"
             echo
-            echo "| Image | Total findings |"
-            echo "|---|---|"
-            printf "| currently released | %s |\n" "$(grep -cE '^\| [a-z]' trivy-old.txt 2>/dev/null || echo 'n/a')"
-            printf "| this build | %s |\n" "$(grep -cE '^\| [a-z]' trivy-new.txt 2>/dev/null || echo 'n/a')"
+            echo "| Image | Total | CRITICAL | HIGH |"
+            echo "|---|---|---|---|"
+            printf "| currently released (alpine) | %s | %s | %s |\n" \
+              "$(count trivy-old.json)" "$(by_sev trivy-old.json CRITICAL)" "$(by_sev trivy-old.json HIGH)"
+            printf "| this build (wolfi) | %s | %s | %s |\n" \
+              "$(count trivy-new.json)" "$(by_sev trivy-new.json CRITICAL)" "$(by_sev trivy-new.json HIGH)"
             echo
-            echo "<details><summary>this build</summary>"
-            echo
-            echo '```'
-            head -60 trivy-new.txt 2>/dev/null || echo "scan unavailable"
-            echo '```'
-            echo "</details>"
+            echo "Advisory, not a gate: a new upstream advisory must not fail an unrelated pull request."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Proves the smoke test can actually fail. A harness that passes against a
