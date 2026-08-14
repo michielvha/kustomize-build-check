@@ -11,7 +11,7 @@ FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base@sha256:0a8fd427de58
 
 ARG TARGETARCH
 ARG KUSTOMIZE_VERSION=v5.8.1
-ARG HELM_VERSION=v4.2.3
+ARG HELM_VERSION=v4.2.4
 
 # wolfi-base defaults to a non-root user, so package installs need an explicit
 # switch. The fetch stage is discarded, so root here never reaches the image.

@@ -24,6 +24,47 @@ carry it: `.goreleaser.yml`, `.github/workflows/build-release.yml`, `action.yml`
 
 ---
 
+### 0. Correction, after measuring (2026-08-14)
+
+**This spec was justified by CVE reduction, and that justification does not survive
+measurement. It is corrected here rather than quietly restated.**
+
+Scanning both images with Trivy:
+
+| | total | in OS packages | our binary | helm | kustomize |
+|---|---|---|---|---|---|
+| alpine (predecessor) | 75 | **0** | 10 | 10 | 55 |
+| Wolfi, same versions | 73 | **0** | 8 | 10 | 55 |
+| Wolfi + Go 1.26.6 + helm 4.2.4 | **65** | **0** | **0** | 10 | 55 |
+
+**Neither image has any OS-package findings.** The CVE surface this spec set out to
+reduce does not exist in either base, so swapping the base cannot reduce it. Every
+finding is in the vendored dependencies of the Go binaries the image carries.
+
+Two consequences:
+
+1. **The base swap is still worth doing, but not for this reason.** What it
+   genuinely delivers is a shell-free entrypoint, a digest-pinned base, no
+   emulated-`apk` workaround, and no hardcoded workload name. Those are real. The
+   goal in §2 is corrected accordingly, and the CVE metric is demoted from the
+   justification to an observation.
+2. **The reachable CVE surface was elsewhere, and is now taken.** All ten of our
+   own binary's findings were Go stdlib issues fixed in 1.26.6; building with it
+   takes them to zero. That is the largest measured improvement in this work and it
+   has nothing to do with the base image.
+
+`kustomize` contributes 55 of the remaining 65 from its own vendored dependencies.
+It is already on the latest release, so that portion is **not reachable from this
+repository** — it moves when upstream updates, or not at all. It is accepted and
+recorded rather than ignored: `tests/e2e/scan-baseline.env` asserts it so a
+regression is visible, and CI gates on the part we control, our own binary.
+
+An earlier CI comparison appeared to show the swap making things *worse* (56 → 82).
+That comparison was invalid: it scanned `:latest`, which resolves to a different
+image than the one actually released. Fixed to compare against a recorded baseline.
+
+---
+
 ### 1. Overview
 
 The released image is built `FROM alpine:3.23` (`Dockerfile:1`) and layers on `git`,
@@ -55,7 +96,7 @@ digest, matching how the consumer action already pins this tool
 
 | Goal | Metric |
 |---|---|
-| Reduce the CVE surface of the released image | A **measured** before/after scan (Trivy or Grype, same scanner, same version, same day, both architectures) is attached to the PR; the new image reports **strictly fewer** total findings and **no new** HIGH or CRITICAL finding than `alpine:3.23`-based `:latest`. No numeric target is asserted here because none has been measured (§10) |
+| ~~Reduce the CVE surface of the released image~~ **Corrected, see §0: there is no OS-package CVE surface to reduce.** Reduce the *attack* surface: no shell in the process tree, no floating base tag, no hardcoded bindings | A **measured** before/after scan (Trivy or Grype, same scanner, same version, same day, both architectures) is attached to the PR; the new image reports **strictly fewer** total findings and **no new** HIGH or CRITICAL finding than `alpine:3.23`-based `:latest`. No numeric target is asserted here because none has been measured (§10) |
 | Change nothing the tool validates, skips, counts or reports | `go test ./... -count=1` passes unchanged (no test file is edited by this change), **and** the image-level smoke test (AC-4) produces byte-identical stdout counts and the same exit code as the current image on the same fixture repo |
 | Keep both published architectures working | `docker buildx` produces a manifest list with `linux/amd64` **and** `linux/arm64` (`build-release.yml:82`), and the smoke test runs on both |
 | Remove the shell from the process tree | The image's `ENTRYPOINT` is exec-form with no `/bin/sh -c`; `docker inspect` shows a single-element entrypoint |
