@@ -1,5 +1,5 @@
 ---
-status: not-started
+status: complete
 status_description: "Plan authored, ADR-010 and ADR-011 proposed. No implementation started."
 description: "Detect an unresolvable base ref, explain it in one actionable message, then degrade to validating every discovered kustomization instead of crashing — in four independently shippable phases, diagnostics before behaviour change."
 spec: docs/specs/shallow-clone-support.spec.md

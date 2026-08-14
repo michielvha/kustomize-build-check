@@ -463,3 +463,39 @@ func TestWrongShapedValueInsideFieldIsRecorded(t *testing.T) {
 		})
 	}
 }
+
+// TestDotDirectoriesAreDiscovered covers AC-P13. Discovery and impact analysis
+// must share one universe: the analyzer marks a directory by the basename of a
+// changed kustomization file without consulting the discovered set, so anything
+// discovery cannot see is validated in diff mode and invisible to a full scan.
+func TestDotDirectoriesAreDiscovered(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{".deploy", "app", ".git"} {
+		full := filepath.Join(root, dir)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(full, "kustomization.yaml"), []byte("resources: []\n"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	files, err := New().FindAll(root)
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+
+	var dirs []string
+	for _, kf := range files {
+		dirs = append(dirs, filepath.Base(kf.Dir))
+	}
+	if !slices.Contains(dirs, ".deploy") {
+		t.Errorf("a kustomization under a dot-directory must be discovered, got %v", dirs)
+	}
+	if !slices.Contains(dirs, "app") {
+		t.Errorf("ordinary directories must still be discovered, got %v", dirs)
+	}
+	if slices.Contains(dirs, ".git") {
+		t.Errorf(".git must still be skipped, got %v", dirs)
+	}
+}
