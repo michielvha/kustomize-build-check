@@ -80,11 +80,21 @@ jobs:
         id: vega
         run: echo "name=$(grep -E '^\s+workload_name:' vega.yaml | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
 
+      - name: Build the real image once
+        run: |
+          docker buildx build --load \
+            --build-arg IMAGE_NAME=${{ steps.vega.outputs.name }} -t kbc-real .
+
+      # Mutants are derived FROM the built image by deleting a binary, rather
+      # than by patching the Dockerfile. Patching it is brittle in two ways:
+      # removing git from the package install breaks a later `git config` line so
+      # the image never builds, and the step then fails for the wrong reason; and
+      # any sed pattern silently stops matching when the Dockerfile is rewritten.
+      # Deleting from the built image is base-agnostic.
       - name: A mutant missing git must FAIL the smoke test
         run: |
-          sed 's/ git ca-certificates wget/ ca-certificates wget/' Dockerfile > Dockerfile.nogit
-          docker buildx build --load -f Dockerfile.nogit \
-            --build-arg IMAGE_NAME=${{ steps.vega.outputs.name }} -t kbc-mutant-nogit .
+          printf 'FROM kbc-real\nUSER root\nRUN rm -f /usr/bin/git /usr/local/bin/git\nUSER 1001\n' > Dockerfile.nogit
+          docker buildx build --load -f Dockerfile.nogit -t kbc-mutant-nogit .
           if ./tests/e2e/smoke.sh kbc-mutant-nogit; then
             echo "::error::The smoke test passed against an image with no git. The harness is not testing anything."
             exit 1
@@ -93,9 +103,8 @@ jobs:
 
       - name: A mutant missing kustomize must FAIL the smoke test
         run: |
-          sed '/Install kustomize/,/chmod +x \/usr\/local\/bin\/kustomize/d' Dockerfile > Dockerfile.nokustomize
-          docker buildx build --load -f Dockerfile.nokustomize \
-            --build-arg IMAGE_NAME=${{ steps.vega.outputs.name }} -t kbc-mutant-nokustomize .
+          printf 'FROM kbc-real\nUSER root\nRUN rm -f /usr/local/bin/kustomize\nUSER 1001\n' > Dockerfile.nokustomize
+          docker buildx build --load -f Dockerfile.nokustomize -t kbc-mutant-nokustomize .
           if ./tests/e2e/smoke.sh kbc-mutant-nokustomize; then
             echo "::error::The smoke test passed against an image with no kustomize. The harness is not testing anything."
             exit 1
