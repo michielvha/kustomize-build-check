@@ -1,0 +1,33 @@
+name: Bump base image digest
+
+# A pinned digest is reproducible, which is why it is used — but it also freezes
+# whatever CVEs the base had on build day. Pinning without a bump mechanism
+# quietly re-accumulates the surface this image exists to reduce, so the pin and
+# this workflow are a pair: neither is correct alone.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  digestabot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: chainguard-dev/digestabot@v1.3.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          create-pr: true
+          signoff: false
+          branch: chore/base-digest-bump
+          title: 'chore: bump the base image digest'
+          commit-message: |
+            chore: bump the base image digest
+
+            Keeps the pinned Wolfi base current. The image-check workflow runs on
+            this PR, so the contract and smoke tests gate the bump before it can
+            land.

@@ -28,7 +28,7 @@ check "effective UID is 1001" "$USER_ID" "1001"
 
 EP="$(docker inspect --format '{{json .Config.Entrypoint}}' "$IMAGE")"
 LEN="$(echo "$EP" | tr ',' '\n' | wc -l | tr -d ' ')"
-check "entrypoint is a single element (no shell)" "$LEN" "1" EXPECT_FAIL
+check "entrypoint is a single element (no shell)" "$LEN" "1"
 if echo "$EP" | grep -q "$WORKLOAD"; then
   echo "FAIL: entrypoint hardcodes the workload name ($WORKLOAD): $EP"; fail=1
 else

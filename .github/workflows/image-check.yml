@@ -54,10 +54,55 @@ jobs:
         run: ./tests/e2e/contract.sh kbc-check:${{ strategy.job-index }}
 
       - name: Base image is pinned
-        run: ./tests/e2e/assert-pinned.sh
+        run: ./tests/e2e/assert-pinned.sh --required
 
       - name: Smoke test, real binary in the real image
         run: ./tests/e2e/smoke.sh kbc-check:${{ strategy.job-index }} ${{ matrix.platform }}
+
+      # The CVE goal is measured against a checked-in baseline, not against
+      # `:latest`. An earlier version compared with `:latest`, which resolves to a
+      # different image than the one actually released, so the comparison was
+      # apples-to-oranges and reported an increase that did not exist.
+      - name: Scan the built image
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: kbc-check:${{ strategy.job-index }}
+          format: json
+          output: trivy.json
+          scanners: vuln
+          exit-code: '0'
+
+      - name: Compare against the recorded baseline
+        continue-on-error: true
+        run: |
+          . tests/e2e/scan-baseline.env
+          n()  { jq "[.Results[]?.Vulnerabilities // [] | length] | add // 0" trivy.json; }
+          os() { jq '[.Results[]? | select(.Class=="os-pkgs") | .Vulnerabilities // [] | length] | add // 0' trivy.json; }
+          mine() { jq '[.Results[]? | select(.Target|test("entrypoint")) | .Vulnerabilities // [] | length] | add // 0' trivy.json; }
+          TOTAL=$(n); OSP=$(os); OURS=$(mine)
+          {
+            echo "## Image scan — ${{ matrix.platform }}"
+            echo
+            echo "| Metric | Baseline (alpine) | This build |"
+            echo "|---|---|---|"
+            echo "| total findings | $BASELINE_TOTAL | $TOTAL |"
+            echo "| in OS packages | $BASELINE_OS_PKGS | $OSP |"
+            echo "| in our binary | $BASELINE_OURS | $OURS |"
+            echo
+            echo "kustomize contributes $BASELINE_KUSTOMIZE of these from its own vendored"
+            echo "dependencies. It is already on the latest release, so that portion is not"
+            echo "reachable from this repository."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # Our own binary is the part we control, so it is the part that is gated.
+          if [ "$OURS" -gt "$MAX_OURS" ]; then
+            echo "::error::Our binary has $OURS findings, budget is $MAX_OURS. Bump the Go toolchain in go.mod."
+            exit 1
+          fi
+          if [ "$TOTAL" -gt "$MAX_TOTAL" ]; then
+            echo "::warning::Total findings $TOTAL exceeds the recorded baseline $MAX_TOTAL."
+          fi
 
   # Proves the smoke test can actually fail. A harness that passes against a
   # deliberately broken image is worse than no harness, because it reads as

@@ -53,7 +53,7 @@ jobs:
       - name: Install kustomize and helm
         env:
           KUSTOMIZE_VERSION: v5.8.1
-          HELM_VERSION: v4.2.3
+          HELM_VERSION: v4.2.4
         run: |
           curl -sfL -o /tmp/kustomize.tar.gz \
             "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
