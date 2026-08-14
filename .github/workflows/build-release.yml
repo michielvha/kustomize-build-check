@@ -20,6 +20,8 @@ on:
       - 'vega.yaml'
       - 'docs/**'
       - 'TODO.md'
+      # The image harness never affects the binary.
+      - 'tests/e2e/**'
   workflow_dispatch:
 
 jobs:
