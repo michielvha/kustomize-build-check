@@ -1,6 +1,6 @@
 ---
 description: "Parse kustomization files with a two-stage yaml.Node decode so an undecodable field yields no references instead of dropping the whole file"
-status: proposed
+status: accepted
 date: 2026-08-12
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ---

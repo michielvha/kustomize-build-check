@@ -225,7 +225,6 @@ func (r *reporter) WriteGitHubStepSummary(results []builder.BuildResult) error {
 // carries the verdict; this carries the explanation.
 type ParseIssue struct {
 	Path   string // the kustomization file
-	Dir    string // the directory it governs
 	Reason string // human-readable cause
 }
 

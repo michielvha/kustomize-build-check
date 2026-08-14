@@ -1,13 +1,33 @@
 package analyzer
 
 import (
+	"bytes"
+	"log/slog"
 	"path/filepath"
 	"slices"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/michielvha/kustomize-build-check/internal/discovery"
 	"github.com/michielvha/kustomize-build-check/internal/graph"
 )
+
+// assertAffectedSet compares the affected set for exact equality, so
+// over-matching fails as loudly as under-matching (F-E4). Containment checks
+// cannot see a spurious extra entry, which is the failure mode that matters when
+// a guard has just been deleted.
+func assertAffectedSet(t *testing.T, got []string, want ...string) {
+	t.Helper()
+
+	g := append([]string(nil), got...)
+	w := append([]string(nil), want...)
+	sort.Strings(g)
+	sort.Strings(w)
+	if !slices.Equal(g, w) {
+		t.Errorf("affected set mismatch\n  got:  %v\n  want: %v", g, w)
+	}
+}
 
 // kustFile builds a KustomizeFile the way discovery does, so fixtures cannot
 // drift from production. FileRefs is what the analyzer matches against; a
@@ -51,9 +71,7 @@ func TestChangedResourceFileMarksKustomizationAffected(t *testing.T) {
 	affected := New().GetAffectedKustomizations(
 		[]string{"base/deployment.yaml"}, newTestGraph(t, files), files)
 
-	if !slices.Contains(affected, baseDir) {
-		t.Errorf("expected %s to be affected, got %v", baseDir, affected)
-	}
+	assertAffectedSet(t, affected, baseDir)
 }
 
 // TestSiblingDirectoryIsNotMatchedByPrefix guards the separator-sensitive
@@ -68,9 +86,7 @@ func TestSiblingDirectoryIsNotMatchedByPrefix(t *testing.T) {
 	affected := New().GetAffectedKustomizations(
 		[]string{"base-old/deployment.yaml"}, newTestGraph(t, files), files)
 
-	if slices.Contains(affected, baseDir) {
-		t.Errorf("a change in base-old must not affect base, got %v", affected)
-	}
+	assertAffectedSet(t, affected)
 }
 
 // TestDeletedKustomizationStillReachesBuildStep documents the division of
@@ -88,9 +104,7 @@ func TestDeletedKustomizationStillReachesBuildStep(t *testing.T) {
 		[]string{"overlays/obsolete/kustomization.yaml"}, newTestGraph(t, files), files)
 
 	want := filepath.Join(root, "overlays", "obsolete")
-	if !slices.Contains(affected, want) {
-		t.Errorf("expected %s to reach the build step, got %v", want, affected)
-	}
+	assertAffectedSet(t, affected, want)
 }
 
 // TestChangedFileUnderUnrelatedKustomizationIsIgnored keeps the analyzer honest:
@@ -105,9 +119,7 @@ func TestChangedFileUnderUnrelatedKustomizationIsIgnored(t *testing.T) {
 	affected := New().GetAffectedKustomizations(
 		[]string{"base/deployment.yaml"}, newTestGraph(t, files), files)
 
-	if len(affected) != 0 {
-		t.Errorf("expected no kustomizations affected, got %v", affected)
-	}
+	assertAffectedSet(t, affected)
 }
 
 // TestCrossDirectorySiblingPrefixIsNotMatched is the F-E2 regression guard for
@@ -147,10 +159,10 @@ func TestCrossDirectorySiblingPrefixIsNotMatched(t *testing.T) {
 			affected := New().GetAffectedKustomizations(
 				[]string{tt.changedFile}, newTestGraph(t, files), files)
 
-			got := slices.Contains(affected, baseDir)
-			if got != tt.want {
-				t.Errorf("changed %q: affected=%v, want %v (affected set: %v)",
-					tt.changedFile, got, tt.want, affected)
+			if tt.want {
+				assertAffectedSet(t, affected, baseDir)
+			} else {
+				assertAffectedSet(t, affected)
 			}
 		})
 	}
@@ -169,9 +181,7 @@ func TestCrossDirectoryReferenceMarksKustomizationAffected(t *testing.T) {
 	affected := New().GetAffectedKustomizations(
 		[]string{"shared/cm.yaml"}, newTestGraph(t, files), files)
 
-	if !slices.Contains(affected, baseDir) {
-		t.Errorf("a cross-directory resource reference must mark its kustomization affected; got %v", affected)
-	}
+	assertAffectedSet(t, affected, baseDir)
 }
 
 // TestAncestorReferenceMatchesEverythingBelowIt documents a consequence of
@@ -190,9 +200,9 @@ func TestAncestorReferenceMatchesEverythingBelowIt(t *testing.T) {
 	affected := New().GetAffectedKustomizations(
 		[]string{"apps/other/deployment.yaml"}, newTestGraph(t, files), files)
 
-	if !slices.Contains(affected, kustDir) {
-		t.Errorf("a reference to an ancestor must match files beneath it; got %v", affected)
-	}
+	// A reference to an ancestor is maximally over-broad, so assert the set
+	// exactly: it must be this directory and nothing else.
+	assertAffectedSet(t, affected, kustDir)
 }
 
 // TestUnrelatedCrossDirectoryFileIsNotMatched keeps the widened matching honest:
@@ -207,9 +217,7 @@ func TestUnrelatedCrossDirectoryFileIsNotMatched(t *testing.T) {
 	affected := New().GetAffectedKustomizations(
 		[]string{"elsewhere/unrelated.yaml"}, newTestGraph(t, files), files)
 
-	if len(affected) != 0 {
-		t.Errorf("an unreferenced file must affect nothing; got %v", affected)
-	}
+	assertAffectedSet(t, affected)
 }
 
 // TestMatchReportsTheReferenceThatCausedIt covers F-A5/AC-A8: an unexpected
@@ -234,5 +242,75 @@ func TestMatchReportsTheReferenceThatCausedIt(t *testing.T) {
 	}
 	if want := filepath.Join(root, "shared", "cm.yaml"); match.Resolved != want {
 		t.Errorf("resolved reference = %q, want %q", match.Resolved, want)
+	}
+}
+
+// TestAffectedSetContract pins the analyzer's output contract (AC-E7, F-E6),
+// which had no test: absolute, cleaned, de-duplicated, never nil, no error
+// return. Phase 3 added the always-affected rule and Phase 4 swapped the
+// matching source, and both touch this return path.
+func TestAffectedSetContract(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+
+	baseDir := filepath.Join(root, "base")
+	files := []discovery.KustomizeFile{
+		// Two routes to the same directory: a direct reference and a ".."-containing
+		// one that cleans to the same path. The result must contain it once.
+		kustFile(baseDir, "cm.yaml", "./nested/../cm.yaml"),
+	}
+
+	affected := New().GetAffectedKustomizations(
+		[]string{"base/cm.yaml"}, newTestGraph(t, files), files)
+
+	if affected == nil {
+		t.Fatal("the affected set must never be nil, even when empty")
+	}
+	seen := map[string]int{}
+	for _, p := range affected {
+		if !filepath.IsAbs(p) {
+			t.Errorf("path %q must be absolute", p)
+		}
+		if p != filepath.Clean(p) {
+			t.Errorf("path %q must be cleaned", p)
+		}
+		seen[p]++
+	}
+	for p, n := range seen {
+		if n > 1 {
+			t.Errorf("path %q appears %d times; the set must be de-duplicated", p, n)
+		}
+	}
+
+	// And the empty case is a non-nil empty slice, not nil.
+	empty := New().GetAffectedKustomizations(nil, newTestGraph(t, nil), nil)
+	if empty == nil {
+		t.Error("the empty affected set must be a non-nil empty slice")
+	}
+}
+
+// TestMatchLogsResolvedReference covers AC-A8/F-A5: an unexpected match must be
+// diagnosable from the debug log alone, so the log carries the field, the raw
+// reference and the resolved path.
+func TestMatchLogsResolvedReference(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	baseDir := filepath.Join(root, "base")
+	files := []discovery.KustomizeFile{kustFile(baseDir, "../shared/cm.yaml")}
+
+	New().GetAffectedKustomizations(
+		[]string{"shared/cm.yaml"}, newTestGraph(t, files), files)
+
+	logged := buf.String()
+	for _, want := range []string{"reference", "../shared/cm.yaml", "resolved", "field", "resources"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("debug log must carry %q so a match is diagnosable; got:\n%s", want, logged)
+		}
 	}
 }

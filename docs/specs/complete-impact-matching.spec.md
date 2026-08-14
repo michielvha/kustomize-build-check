@@ -1,7 +1,7 @@
 ## SPECIFICATION: Complete & Correct Impact Matching
 
 **Version:** 1.0
-**Status:** Draft
+**Status:** Shipped (0.6.0)
 **Date:** 2026-08-12
 **Type:** feature (correctness feature: closes four false-pass classes and adds the missing reference surfaces)
 **Slug:** complete-impact-matching

@@ -599,15 +599,20 @@ func TestMalformedKustomizationIsBuiltNotDropped(t *testing.T) {
 	r := newRepo(t)
 	r.write("app/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\n")
 	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	// A second, unrelated directory whose kustomization is already broken and is
+	// NOT touched by the change. Editing app/ must still surface it, which only
+	// happens because an unparseable file is retained and always-affected.
+	r.write("broken/kustomization.yaml", "resources: [unclosed\n  : : :\n")
 	r.commitBase()
 
-	// Break the YAML, and touch nothing else.
-	r.write("app/kustomization.yaml", "resources: [unclosed\n  : : :\n")
+	// Touch only the healthy directory.
+	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  labels: {a: b}\n")
 	r.commitChange()
 
 	summary := r.run()
 
-	r.assertAffected(summary, "app")
+	// broken/ is validated despite the change never touching it.
+	r.assertAffected(summary, "app", "broken")
 	if summary.Failed == 0 {
 		t.Fatalf("an unparseable kustomization must not produce a green run, got %+v", summary)
 	}
@@ -645,20 +650,24 @@ func TestUnreadableKustomizationIsBuiltNotDropped(t *testing.T) {
 // surface, so a change to a file it would have referenced passes unvalidated.
 func TestFieldErrorStillReachesTheBuilder(t *testing.T) {
 	r := newRepo(t)
-	// `bases` given as a mapping where a list is expected: decodable document,
-	// undecodable field.
-	r.write("app/kustomization.yaml", kustomizationHeader+"resources:\n  - cm.yaml\nbases: {not: a-list}\n")
-	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n")
+	// The edited file is reachable ONLY through the undecodable field. If it were
+	// also listed in `resources`, ordinary reference matching would mark the
+	// directory and this test would pass with the always-affected rule reverted —
+	// which is exactly the decorative-test trap the plan warned about.
+	r.write("app/kustomization.yaml", kustomizationHeader+
+		"resources:\n  - deployment.yaml\npatches: {not: a-list}\n")
+	r.write("app/deployment.yaml", "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\n")
+	r.write("app/patch.yaml", "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 2\n")
 	r.commitBase()
 
-	// Change only a sibling file.
-	r.write("app/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  labels: {a: b}\n")
+	// Touch ONLY the file the undecodable `patches` field would have referenced.
+	r.write("app/patch.yaml", "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  replicas: 9\n")
 	r.commitChange()
 
 	summary := r.run()
 
-	// The directory must be validated despite the tool not knowing what `bases`
-	// referenced.
+	// Nothing in the parsed reference set points at patch.yaml, so the directory
+	// is reached only because the field error makes it always-affected.
 	r.assertAffected(summary, "app")
 }
 

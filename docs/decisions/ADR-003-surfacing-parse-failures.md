@@ -1,6 +1,6 @@
 ---
 description: "Surface parse failures through additive reporter methods and an analyzer always-affected rule, leaving BuildResult and the action outputs contract untouched"
-status: proposed
+status: accepted
 date: 2026-08-12
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ---

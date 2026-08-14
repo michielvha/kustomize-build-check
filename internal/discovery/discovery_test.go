@@ -235,7 +235,11 @@ func TestFindAllRetainsUnparseableFiles(t *testing.T) {
 
 // TestFileRefsSupersetOfResources is the guard for the one narrowing step in
 // this work: the analyzer switched from matching Resources to matching FileRefs,
-// so FileRefs must never lose an entry Resources had.
+// so FileRefs must never lose a *matchable* entry Resources had.
+//
+// "Matchable" is the precise claim. Remote references are deliberately dropped
+// from FileRefs, which loses nothing: a changed path is always local, so a
+// remote reference could never have matched one.
 func TestFileRefsSupersetOfResources(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "kustomization.yaml")
@@ -420,5 +424,42 @@ func TestWrongShapeFieldIsRecordedNotFatal(t *testing.T) {
 	}
 	if !kf.Unknown() {
 		t.Error("a field error means references are unknown")
+	}
+}
+
+// TestWrongShapedValueInsideFieldIsRecorded closes the F-C6 hole the shipped-code
+// review found: a value that is present but the wrong shape used to be swallowed,
+// so the tool learned no references from that field while believing it had
+// learned them all. That is a false pass of exactly the class Phase 3 closed.
+func TestWrongShapedValueInsideFieldIsRecorded(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"patches path as a list", "patches:\n  - path: [a, b]\n"},
+		{"generator files as a string", "configMapGenerator:\n  - name: cm\n    files: \"notalist\"\n"},
+		{"helmCharts valuesFile as a list", "helmCharts:\n  - name: d\n    valuesFile: [x]\n"},
+		{"openapi path as a list", "openapi:\n  path: [x]\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "kustomization.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			kf, err := New().ParseKustomization(path)
+			if err != nil {
+				t.Fatalf("a wrong-shaped value must not fail the whole file: %v", err)
+			}
+			if len(kf.FieldErrs) == 0 {
+				t.Errorf("a wrong-shaped value must record a FieldError, got %+v", kf)
+			}
+			if !kf.Unknown() {
+				t.Error("references are unknown, so the directory must be always-affected")
+			}
+		})
 	}
 }

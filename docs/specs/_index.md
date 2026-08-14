@@ -3,7 +3,7 @@
 Specs are the source of truth for behaviour in this repository. Changes start here, not in
 the code. See [CLAUDE.md](../../CLAUDE.md) for the constitution.
 
-All five specs below are **retro-specs**: they document behaviour that was already shipped
+The five specs in the pipeline table below are **retro-specs**: they document behaviour that was already shipped
 and already covered by tests, with a `file:line` citation behind every claim. They supersede
 [design.md](../../design.md), which has drifted from the code in several places (recorded per
 spec).

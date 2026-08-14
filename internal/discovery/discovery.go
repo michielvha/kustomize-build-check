@@ -24,7 +24,10 @@ func (e FieldError) Error() string { return e.Field + ": " + e.Err.Error() }
 // match can be traced back to the field that produced it.
 type Ref struct {
 	Field string // the kustomization field, e.g. "configMapGenerator.files"
-	Raw   string // the reference as written, after alias stripping
+	// Raw is the path this reference resolves against. For generator fields it
+	// is the path portion after the "key=" alias is stripped, so it is not
+	// always byte-identical to what the author wrote.
+	Raw string
 }
 
 // KustomizeFile represents a parsed kustomization file
@@ -181,11 +184,11 @@ func (kf *KustomizeFile) collectFileRefs(doc map[string]yaml.Node) {
 	// patches[] entries are objects: {path, target} or an inline {patch}.
 	// An entry with no path contributes nothing and is not an error.
 	for _, p := range decodeObjectList(kf, doc, "patches") {
-		kf.addRefs("patches.path", decodeField[string](p, "path")...)
+		kf.addRefs("patches.path", decodeField[string](kf, "patches", p, "path")...)
 	}
 	// patchesJson6902[] is the deprecated equivalent, same shape.
 	for _, p := range decodeObjectList(kf, doc, "patchesJson6902") {
-		kf.addRefs("patchesJson6902.path", decodeField[string](p, "path")...)
+		kf.addRefs("patchesJson6902.path", decodeField[string](kf, "patchesJson6902", p, "path")...)
 	}
 	// patchesStrategicMerge[] is a plain list of paths (deprecated).
 	kf.addRefs("patchesStrategicMerge", decodeStrings(kf, doc, "patchesStrategicMerge")...)
@@ -194,18 +197,18 @@ func (kf *KustomizeFile) collectFileRefs(doc map[string]yaml.Node) {
 	// "key=path" alias form.
 	for _, field := range []string{"configMapGenerator", "secretGenerator"} {
 		for _, g := range decodeObjectList(kf, doc, field) {
-			kf.addRefs(field+".files", decodeField[[]string](g, "files")...)
-			kf.addRefs(field+".envs", decodeField[[]string](g, "envs")...)
+			kf.addRefs(field+".files", decodeField[[]string](kf, field, g, "files")...)
+			kf.addRefs(field+".envs", decodeField[[]string](kf, field, g, "envs")...)
 			// `env` is the deprecated singular form.
-			kf.addRefs(field+".env", decodeField[string](g, "env")...)
+			kf.addRefs(field+".env", decodeField[string](kf, field, g, "env")...)
 		}
 	}
 
 	// helmCharts[] valuesFile / additionalValuesFiles are local files whose
 	// contents change the rendered output.
 	for _, h := range decodeObjectList(kf, doc, "helmCharts") {
-		kf.addRefs("helmCharts.valuesFile", decodeField[string](h, "valuesFile")...)
-		kf.addRefs("helmCharts.additionalValuesFiles", decodeField[[]string](h, "additionalValuesFiles")...)
+		kf.addRefs("helmCharts.valuesFile", decodeField[string](kf, "helmCharts", h, "valuesFile")...)
+		kf.addRefs("helmCharts.additionalValuesFiles", decodeField[[]string](kf, "helmCharts", h, "additionalValuesFiles")...)
 	}
 
 	// Lower-traffic surfaces that still resolve local files.
@@ -213,7 +216,7 @@ func (kf *KustomizeFile) collectFileRefs(doc map[string]yaml.Node) {
 	kf.addRefs("configurations", decodeStrings(kf, doc, "configurations")...)
 	// openapi is a mapping, not a list (verified against kustomize v5.8.1).
 	if o := decodeObject(kf, doc, "openapi"); o != nil {
-		kf.addRefs("openapi.path", decodeField[string](o, "path")...)
+		kf.addRefs("openapi.path", decodeField[string](kf, "openapi", o, "path")...)
 	}
 }
 
@@ -283,16 +286,24 @@ func decodeObject(kf *KustomizeFile, doc map[string]yaml.Node, field string) map
 	return out
 }
 
-// decodeField pulls one typed value out of a decoded mapping. A missing or
-// undecodable key yields nothing: these are optional by design (a patches entry
-// may carry an inline `patch` and no `path`), so this is not a FieldError.
-func decodeField[T any](obj map[string]yaml.Node, key string) []string {
+// decodeField pulls one typed value out of a decoded mapping.
+//
+// A *missing* key yields nothing and is not an error: these are optional by
+// design, since a patches entry may carry an inline `patch` and no `path`.
+//
+// A key that is *present but the wrong shape* is different, and must be
+// recorded. Returning nil silently would mean the tool learned no references
+// from that field while believing it had learned all of them — which is the
+// false pass this whole change exists to close (F-C6). The FieldError makes the
+// directory always-affected, so kustomize adjudicates.
+func decodeField[T any](kf *KustomizeFile, field string, obj map[string]yaml.Node, key string) []string {
 	node, ok := obj[key]
 	if !ok {
 		return nil
 	}
 	var v T
 	if err := node.Decode(&v); err != nil {
+		kf.FieldErrs = append(kf.FieldErrs, FieldError{Field: field + "." + key, Err: err})
 		return nil
 	}
 	switch typed := any(v).(type) {
