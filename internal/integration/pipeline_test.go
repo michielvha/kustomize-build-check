@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -1235,5 +1236,37 @@ func TestTimedOutBuildIsNotListedAsBuildError(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "⏱️") {
 		t.Errorf("the console must distinguish a timeout, got:\n%s", stdout)
+	}
+}
+
+// TestReleaseGoVersionMatchesGoMod guards a coupling that is invisible until it
+// breaks the release: the goreleaser action pins its own Go and sets
+// GOTOOLCHAIN=local, so it cannot self-upgrade. If go.mod requires a newer
+// toolchain than the workflow passes, the release fails after the merge — when
+// it is most expensive to notice.
+func TestReleaseGoVersionMatchesGoMod(t *testing.T) {
+	root := repoRoot(t)
+
+	goMod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^go (\d+\.\d+(?:\.\d+)?)`).FindSubmatch(goMod)
+	if m == nil {
+		t.Fatal("no go directive found in go.mod")
+	}
+	want := string(m[1])
+
+	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "build-release.yml"))
+	if err != nil {
+		t.Fatalf("read workflow: %v", err)
+	}
+	w := regexp.MustCompile(`go-version:\s*'([^']+)'`).FindSubmatch(wf)
+	if w == nil {
+		t.Fatal("the release workflow must pin go-version explicitly")
+	}
+	if got := string(w[1]); got != want {
+		t.Errorf("release workflow go-version = %s, but go.mod requires %s.\n"+
+			"The action sets GOTOOLCHAIN=local, so a mismatch fails the release after merge.", got, want)
 	}
 }
