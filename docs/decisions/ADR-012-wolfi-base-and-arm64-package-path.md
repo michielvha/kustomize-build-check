@@ -1,6 +1,6 @@
 ---
 description: "Use a digest-pinned cgr.dev/chainguard/wolfi-base for both stages, keep the download work on the build platform, and never carry --no-scripts forward; fall back down a three-rung ladder if emulated apk misbehaves on arm64."
-status: proposed
+status: accepted
 date: 2026-08-12
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ---

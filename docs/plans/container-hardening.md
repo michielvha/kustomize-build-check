@@ -1,5 +1,5 @@
 ---
-status: not-started
+status: complete
 status_description: "Plan authored. OQ-3 resolved by ADR-014, OQ-4 resolved by making the smoke test explicit about -v/-w/-u. No implementation started."
 description: "Swap the released image from alpine:3.23 to a digest-pinned Wolfi base behind a new image-level smoke test and a measured before/after CVE scan, in seven phases with per-phase single-commit rollback."
 spec: docs/specs/container-hardening.spec.md

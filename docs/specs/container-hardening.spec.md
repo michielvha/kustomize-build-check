@@ -1,6 +1,6 @@
 ## SPECIFICATION: Container Hardening (alpine → Wolfi base, CVE surface reduction)
 **Version:** 1.0
-**Status:** Draft
+**Status:** Shipped (justification corrected, see §0)
 **Date:** 2026-08-12
 **Type:** feature
 **Slug:** container-hardening

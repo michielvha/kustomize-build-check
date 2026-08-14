@@ -1,6 +1,6 @@
 ---
 description: "Keep the pinned Wolfi base digest fresh with Chainguard's digestabot on a weekly schedule, gated by the new image-check workflow, rather than Renovate or a documented manual cadence."
-status: proposed
+status: accepted
 date: 2026-08-12
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ---

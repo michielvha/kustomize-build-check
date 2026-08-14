@@ -26,3 +26,14 @@
   - Shallow clones fail under both real git and go-git when the base sha is
     unreachable, so that is not a regression either way. Making the action work
     on `fetch-depth: 1` would be a separate feature.
+
+- **kustomize's vendored dependencies are the remaining CVE surface.** 55 of the
+  released image's 65 Trivy findings come from kustomize's own dependencies, and
+  10 more from helm's. Both are already on their latest releases, so neither is
+  reachable from this repository; they move when upstream updates. Our own binary
+  is at zero and CI gates it there. Recorded so the number is not mistaken for
+  something this repo can fix. Re-measure with `tests/e2e/scan-baseline.env`.
+- **`govulncheck` would be a sharper signal than Trivy for the Go side.** Trivy
+  reports every stdlib CVE in a binary; govulncheck reports only the ones actually
+  reachable from our code paths. Worth adding if the numbers above ever need
+  triage rather than elimination.

@@ -1,6 +1,6 @@
 ---
 description: "Verify the kustomize and helm tarballs against SHA256 constants pinned in the Dockerfile as per-arch build ARGs, rather than against a checksum file fetched over the same channel as the tarball."
-status: proposed
+status: accepted
 date: 2026-08-12
 author: "SDD Planner (automated), run by michielvha <michielvh@outlook.com>"
 ---
