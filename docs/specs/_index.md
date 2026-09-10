@@ -41,14 +41,20 @@ visible up front rather than discovered mid-build.
 | [shallow-clone-support](./shallow-clone-support.spec.md) | **Shipped** | [plan](../plans/shallow-clone-support.md) | The action hard-fails with a raw `fatal: bad object` when the base ref is not reachable locally, which is what `actions/checkout`'s default `fetch-depth: 1` produces. Detects the case, explains it, and degrades to validating everything rather than concluding "nothing changed". |
 | [build-timeout-handling](./build-timeout-handling.spec.md) | **Shipped** | [plan](../plans/build-timeout-handling.md) | A timed-out build is currently indistinguishable from a broken kustomization, sending people to debug the wrong thing. Makes the cause machine-readable, adds a `build-timeout` input, and fixes a latent nil-pointer panic in the kill timer. |
 | [container-hardening](./container-hardening.spec.md) | **Shipped** | [plan](../plans/container-hardening.md) | Moves the image off `alpine:3.23` to a Wolfi base to cut CVE surface, with behaviour parity as a hard requirement. Full distroless was considered and rejected: it needs go-git, costing 48 extra modules and a behaviour change. |
+| [component-skip-semantics](./component-skip-semantics.spec.md) | **Draft** (2026-09-10) | not yet planned | A `kind: Component` is handed to `kustomize build` as if it were a standalone target, so any component carrying a patch fails the check while every overlay that consumes it builds green. Found live on `argocd-k8s-resources` PR #196, where the workaround was to abandon the component and duplicate the patch. Reports components as skipped with a distinct reason and relies on the `components:` graph edges that already validate them through their parents. |
 
 **Sequencing.** `complete-impact-matching` first — it is the only one fixing active false passes.
 Then `shallow-clone-support`, then `build-timeout-handling`, then `container-hardening` (no
 behaviour change, so it is safest last, and it wants the smoke-test harness built against the
-current image first).
+current image first). `component-skip-semantics` is independent of all four and can be taken
+whenever; it is the only one fixing an active false *fail*.
 
-Every known gap is now spec'd. Nothing is waiting on a decision: the specs are complete enough
-that implementation can start on any of them.
+One decision is outstanding, and it is deliberate:
+[component-skip-semantics](./component-skip-semantics.spec.md) §10 O-1 leaves the choice between a
+single `Skipped` counter and a per-reason split to the plan phase, because
+`TestConsolidateDuplicatedDirsIntoComponent` (cited in
+[build-execution](./build-execution.spec.md) §2 and AC-1) asserts against the single counter.
+Everything else is spec'd well enough that implementation can start.
 
 ## Known gaps recorded by these specs
 
@@ -68,4 +74,5 @@ The remaining rows are still open and unclaimed.
 | Unparseable kustomization YAML is warned and skipped | [kustomization-discovery](./kustomization-discovery.spec.md) | It is excluded from the graph, so nothing depending on it is validated. **False pass.** |
 | Dotted directory names lose graph edges | [kustomization-discovery](./kustomization-discovery.spec.md) | `filepath.Ext("../bases/v1.2")` is `".2"`, so the reference is treated as a file and the base→overlay edge is dropped. **False pass.** |
 | A timed-out build is indistinguishable from a failed one | [build-timeout-handling](./build-timeout-handling.spec.md) | Reported identically apart from a WARN log line, so a slow build reads as a broken manifest. Now spec'd, along with a latent nil-pointer panic: the kill timer is armed before `cmd.Run()` starts the process, so a short timeout dereferences a nil `cmd.Process` in a goroutine with no recover. Unreachable at the current 2 minutes, hit immediately by any timeout test. |
+| A kustomize Component is built as if it were a standalone target | [component-skip-semantics](./component-skip-semantics.spec.md) | A `kind: Component` carries no resources of its own and its patches resolve against the parent that lists it under `components:`, so a component holding a patch fails the check while all its consumers build green. Reproduced: `4 total, 3 successful, 1 failed, 0 skipped`, exit 1, on a correct change. **False fail**, and an expensive one: on PR #196 it forced the component to be abandoned and its patch duplicated into seven overlays. |
 | `action.yml` documents a `base-ref` default the binary does not implement | [change-detection](./change-detection.spec.md) | Advertised as the PR base sha; the code implements `"" → HEAD~1`. Documentation defect. |
