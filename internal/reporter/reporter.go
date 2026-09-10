@@ -9,6 +9,13 @@ import (
 	"github.com/michielvha/kustomize-build-check/internal/builder"
 )
 
+// componentSkipReason mirrors discovery.ComponentSkipReason.
+//
+// It is duplicated rather than imported because internal/reporter already
+// depends on internal/builder alone, and the reason travels here as data on a
+// BuildResult, not as a type. The pair is pinned by TestComponentSkipReasonMatchesDiscovery.
+const componentSkipReason = "kustomize Component, not a standalone build target"
+
 // Summary contains aggregated build results
 type Summary struct {
 	Total int
@@ -21,7 +28,19 @@ type Summary struct {
 	// build was never validated, so it must keep failing the run; it is broken
 	// out only so the report can say *why* it failed.
 	TimedOut int
-	Results  []builder.BuildResult
+	// SkippedRemoved and SkippedComponent are sub-counts of Skipped, the same
+	// pattern as TimedOut and for the same reason: the aggregate answers "how
+	// many", and these answer "why". They exist because the two causes are not
+	// interchangeable — one means the change deleted a directory, the other
+	// means the directory is a kustomize Component that is only buildable
+	// through a parent — and a single number silently conflates them.
+	//
+	// They sum to Skipped. Neither is published as a GitHub Actions output: the
+	// per-path reason is already rendered in the console line and the step
+	// summary, so no new name enters the public output contract.
+	SkippedRemoved   int
+	SkippedComponent int
+	Results          []builder.BuildResult
 }
 
 // Reporter formats and outputs build results
@@ -74,6 +93,11 @@ func (r *reporter) GenerateSummary(results []builder.BuildResult) Summary {
 		switch {
 		case result.Skipped:
 			summary.Skipped++
+			if result.SkipReason == componentSkipReason {
+				summary.SkippedComponent++
+			} else {
+				summary.SkippedRemoved++
+			}
 		case result.Success:
 			summary.Success++
 		default:
@@ -247,7 +271,7 @@ func (r *reporter) WriteGitHubStepSummary(results []builder.BuildResult) error {
 
 	if summary.Skipped > 0 {
 		sb.WriteString("### ⏭️ Skipped\n\n")
-		sb.WriteString("These paths no longer exist in the working tree and were not built.\n\n")
+		sb.WriteString("These paths were not built. The reason is given per path.\n\n")
 		for _, result := range results {
 			if result.Skipped {
 				sb.WriteString(fmt.Sprintf("- %s (%s)\n", result.Path, result.SkipReason))

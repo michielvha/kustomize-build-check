@@ -53,7 +53,7 @@ outputs:
     description: 'Number of successful builds'
 
   skipped-count:
-    description: 'Number of paths skipped because they no longer exist (deleted or renamed by the change)'
+    description: 'Number of paths not built: removed by the change (deleted or renamed), or a kustomize Component, which is only buildable through a parent. The per-path reason is in the results JSON and the step summary'
 
   change-detection-mode:
     description: 'How the validated set was determined: diff (normal) or full-scan (base-ref unresolvable, so everything was validated)'

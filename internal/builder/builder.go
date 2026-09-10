@@ -19,9 +19,10 @@ type BuildResult struct {
 	// is neither a success nor a failure, so check Skipped before treating
 	// !Success as a build error.
 	Success bool
-	// Skipped marks a path that was never handed to kustomize because the change
-	// removed it. Skipped results are excluded from both the success and the
-	// failure counts. See skipReason for exactly what qualifies.
+	// Skipped marks a path that was never handed to kustomize, either because
+	// the change removed it or because it is not a standalone build target.
+	// Skipped results are excluded from both the success and the failure counts.
+	// See skipReason and SetNotBuildTargets for exactly what qualifies.
 	Skipped    bool
 	SkipReason string
 	Output     string
@@ -46,6 +47,7 @@ type BuildResult struct {
 type Builder interface {
 	Build(path string, enableHelm bool) BuildResult
 	BuildAll(paths []string, enableHelm bool) []BuildResult
+	SetNotBuildTargets(reasons map[string]string)
 }
 
 // defaultWaitGrace bounds how long Run may block *after* the deadline kills the
@@ -67,6 +69,11 @@ type builder struct {
 	timeout time.Duration
 	grace   time.Duration
 	command string
+	// notBuildTargets maps a path to the reason it is not a standalone build
+	// target. It is decided upstream, where the parsed kustomizations already
+	// live, so this package needs no second kustomization parser and keeps its
+	// stdlib-only dependency set. Nil means every surviving path is built.
+	notBuildTargets map[string]string
 }
 
 // New creates a Builder with the default 2-minute per-build timeout.
@@ -90,11 +97,16 @@ func NewWithTimeout(timeout time.Duration) Builder {
 func (b *builder) Build(path string, enableHelm bool) BuildResult {
 	start := time.Now()
 
-	// A path the change removed is not a build target. Deleting or renaming a
-	// kustomize directory leaves its old path in the diff, so it still reaches
-	// this point as a candidate; building it would report a bogus failure for a
-	// directory the change legitimately removed.
-	if reason := skipReason(path); reason != "" {
+	// Not every candidate is a build target. Deleting or renaming a kustomize
+	// directory leaves its old path in the diff, so it still reaches this point;
+	// and a directory the caller has classified as not-a-build-target (a
+	// kustomize Component) is buildable only through a parent. Handing either to
+	// kustomize reports a bogus failure on a correct change.
+	//
+	// Removal is tested FIRST and deliberately: a path that no longer exists has
+	// no kustomization file to have a kind, so a deleted component directory must
+	// report that it was removed, not what it used to be.
+	if reason := b.skipReason(path); reason != "" {
 		slog.Debug("Skipping build", "path", path, "reason", reason)
 		return BuildResult{
 			Path:       path,
@@ -190,8 +202,9 @@ func (b *builder) Build(path string, enableHelm bool) BuildResult {
 //
 // The check is deliberately narrow. A directory that still holds content but
 // has lost its kustomization file is a genuine error and must stay a failure,
-// so only paths the change actually removed are skipped.
-func skipReason(path string) string {
+// so the only reasons here are that the change removed the path, or that the
+// caller classified it as not a standalone build target.
+func (b *builder) skipReason(path string) string {
 	entries, err := os.ReadDir(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -206,7 +219,18 @@ func skipReason(path string) string {
 		// file out of a directory leaves the empty directory behind.
 		return "removed in this change (empty directory)"
 	}
-	return ""
+
+	return b.notBuildTargets[path]
+}
+
+// SetNotBuildTargets records paths that must not be handed to kustomize on
+// their own, keyed by path with the reason to report.
+//
+// The classification is made by the caller rather than here because it needs a
+// parsed kustomization file, and this package deliberately depends on the
+// standard library only. Removal always wins over an entry in this map.
+func (b *builder) SetNotBuildTargets(reasons map[string]string) {
+	b.notBuildTargets = reasons
 }
 
 // BuildAll executes builds for all paths

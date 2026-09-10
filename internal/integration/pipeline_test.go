@@ -137,7 +137,11 @@ func (r *repo) run() reporter.Summary {
 	}
 
 	affected := analyzer.New().GetAffectedKustomizations(changedFiles, g, kustomizations)
-	results := builder.New().BuildAll(affected, true)
+	bldr := builder.New()
+	// Mirrors cmd/action/main.go. If this drifts, the integration tests stop
+	// exercising the wiring that actually ships.
+	bldr.SetNotBuildTargets(discovery.NotBuildTargets(kustomizations))
+	results := bldr.BuildAll(affected, true)
 
 	return reporter.New().GenerateSummary(results)
 }
@@ -253,8 +257,22 @@ func TestConsolidateDuplicatedDirsIntoComponent(t *testing.T) {
 		t.Fatal("expected at least one removed directory to reach the build step; " +
 			"the regression this test guards would no longer be covered")
 	}
-	if summary.Skipped != skipped {
-		t.Errorf("expected %d skipped, got %d", skipped, summary.Skipped)
+	// Assert on the removal sub-count, not the aggregate. This fixture also
+	// creates a kind: Component, which is skipped for a different reason, so the
+	// aggregate legitimately exceeds the number of removed directories. Keying
+	// on SkippedRemoved keeps this assertion true by construction rather than by
+	// arithmetic that every future skip reason would break again.
+	if summary.SkippedRemoved != skipped {
+		t.Errorf("expected %d skipped for removal, got %d (aggregate %d)",
+			skipped, summary.SkippedRemoved, summary.Skipped)
+	}
+	if summary.SkippedComponent != 1 {
+		t.Errorf("expected the shared component to be skipped as a component, got %d",
+			summary.SkippedComponent)
+	}
+	if summary.SkippedRemoved+summary.SkippedComponent != summary.Skipped {
+		t.Errorf("sub-counts must sum to Skipped: %d + %d != %d",
+			summary.SkippedRemoved, summary.SkippedComponent, summary.Skipped)
 	}
 
 	// Criterion 3: skipped paths are excluded from both counts.
@@ -1268,5 +1286,124 @@ func TestReleaseGoVersionMatchesGoMod(t *testing.T) {
 	if got := string(w[1]); got != want {
 		t.Errorf("release workflow go-version = %s, but go.mod requires %s.\n"+
 			"The action sets GOTOOLCHAIN=local, so a mismatch fails the release after merge.", got, want)
+	}
+}
+
+// componentWithPatch stages the PR #196 shape: one component carrying a
+// strategic-merge patch, consumed by envs overlays that each own a Deployment
+// for the patch to target.
+func (r *repo) componentWithPatch(envs ...string) {
+	r.t.Helper()
+
+	r.write("manifests/components/probe-tuning/kustomization.yaml",
+		"apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\npatches:\n  - path: probe-patch.yaml\n")
+	r.write("manifests/components/probe-tuning/probe-patch.yaml",
+		"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  replicas: 3\n")
+
+	for _, env := range envs {
+		r.write("manifests/overlays/app/"+env+"/deployment.yaml",
+			"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: api\n  template:\n    metadata:\n      labels:\n        app: api\n    spec:\n      containers:\n        - name: api\n          image: nginx\n")
+		r.write("manifests/overlays/app/"+env+"/kustomization.yaml",
+			kustomizationHeader+"resources:\n  - deployment.yaml\ncomponents:\n  - ../../../components/probe-tuning\n")
+	}
+}
+
+// TestPatchComponentIsSkippedNotFailed is the regression test for the reported
+// defect (spec F-19). Building the component alone fails, because its patch has
+// no resource to target outside a parent. The run must stay green and report the
+// component as skipped.
+func TestPatchComponentIsSkippedNotFailed(t *testing.T) {
+	r := newRepo(t)
+	r.write("manifests/overlays/app/dev/kustomization.yaml", kustomizationHeader)
+	r.commitBase()
+
+	r.componentWithPatch("dev", "int", "acc")
+	r.commitChange()
+
+	summary := r.run()
+
+	if summary.Failed != 0 {
+		t.Errorf("expected no failures, got %d\n     %s", summary.Failed, paths(summary))
+	}
+
+	component := resultFor(t, summary, r.path("manifests/components/probe-tuning"))
+	if !component.Skipped {
+		t.Errorf("component should be skipped, got %+v", component)
+	}
+	if component.Success {
+		t.Error("a skipped component must not count as a success")
+	}
+	if component.SkipReason != "kustomize Component, not a standalone build target" {
+		t.Errorf("SkipReason = %q, want the component reason", component.SkipReason)
+	}
+
+	for _, env := range []string{"dev", "int", "acc"} {
+		res := resultFor(t, summary, r.path("manifests/overlays/app/"+env))
+		if !res.Success {
+			t.Errorf("overlay %s should have built: %s", env, res.Error)
+		}
+	}
+
+	if summary.Success+summary.Failed+summary.Skipped != summary.Total {
+		t.Errorf("counts do not add up: %d + %d + %d != %d",
+			summary.Success, summary.Failed, summary.Skipped, summary.Total)
+	}
+}
+
+// TestBrokenComponentFailsThroughItsParents is the anti-false-pass guard
+// (spec F-20). Without it, the whole justification for skipping components is
+// unproven: the skip is only acceptable because every consumer inflates the
+// component in full and goes red when it is broken.
+func TestBrokenComponentFailsThroughItsParents(t *testing.T) {
+	r := newRepo(t)
+	r.write("manifests/overlays/app/dev/kustomization.yaml", kustomizationHeader)
+	r.commitBase()
+
+	r.componentWithPatch("dev", "int")
+	// Break it: the component now references a file that does not exist.
+	r.write("manifests/components/probe-tuning/kustomization.yaml",
+		"apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\npatches:\n  - path: does-not-exist.yaml\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	if summary.Failed == 0 {
+		t.Fatalf("a broken component must turn the run red through its parents, got %d failed\n     %s",
+			summary.Failed, paths(summary))
+	}
+
+	for _, env := range []string{"dev", "int"} {
+		res := resultFor(t, summary, r.path("manifests/overlays/app/"+env))
+		if res.Success {
+			t.Errorf("overlay %s consumes a broken component and must fail", env)
+		}
+	}
+}
+
+// TestComponentFileEditValidatesConsumers covers spec F-21. The `components:`
+// graph edge is what carries validation now that the component itself is never
+// built, so losing that edge would be a silent false pass.
+func TestComponentFileEditValidatesConsumers(t *testing.T) {
+	r := newRepo(t)
+	r.componentWithPatch("dev", "int", "acc")
+	r.commitBase()
+
+	// Touch ONLY a file inside the component directory.
+	r.write("manifests/components/probe-tuning/probe-patch.yaml",
+		"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  replicas: 5\n")
+	r.commitChange()
+
+	summary := r.run()
+
+	if summary.Failed != 0 {
+		t.Errorf("expected no failures, got %d\n     %s", summary.Failed, paths(summary))
+	}
+
+	for _, env := range []string{"dev", "int", "acc"} {
+		res := resultFor(t, summary, r.path("manifests/overlays/app/"+env))
+		if !res.Success {
+			t.Errorf("overlay %s must be validated when the component changes: skipped=%v err=%s",
+				env, res.Skipped, res.Error)
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -497,5 +498,133 @@ func TestDotDirectoriesAreDiscovered(t *testing.T) {
 	}
 	if slices.Contains(dirs, ".git") {
 		t.Errorf(".git must still be skipped, got %v", dirs)
+	}
+}
+
+// componentFixture writes a kustomization file into a fresh directory and
+// returns the parsed entry.
+func componentFixture(t *testing.T, name, content string) KustomizeFile {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	kf, _ := New().(*discoverer).ParseKustomization(path)
+	if kf == nil {
+		t.Fatalf("ParseKustomization returned nil for %s", path)
+	}
+	return *kf
+}
+
+// TestIsComponentKeysOnKindAlone covers F-02, F-03 and F-04: the predicate is an
+// allow-nothing-else list of one, an absent kind means Kustomization, and
+// apiVersion is never consulted.
+func TestIsComponentKeysOnKindAlone(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"component", "apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\n", true},
+		{"component with wrong apiVersion still a component",
+			"apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Component\n", true},
+		{"component with no apiVersion at all", "kind: Component\n", true},
+		{"kustomization", "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n", false},
+		{"kind absent means Kustomization", "resources:\n  - cm.yaml\n", false},
+		{"empty kind", "kind: \"\"\n", false},
+		{"whitespace-only kind", "kind: \"   \"\n", false},
+		{"unknown kind is built, not skipped", "kind: SomethingElse\n", false},
+		{"kind is case-sensitive", "kind: component\n", false},
+		// A non-string kind records a FieldError and yields "", so it builds.
+		// F-06: anything we cannot determine fails open to kustomize.
+		{"kind is not a string", "kind:\n  - Component\n", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kf := componentFixture(t, "kustomization.yaml", tc.content)
+			if got := kf.IsComponent(); got != tc.want {
+				t.Errorf("IsComponent() = %v, want %v (kind=%q)", got, tc.want, kf.Kind)
+			}
+		})
+	}
+}
+
+// TestNotBuildTargetsSkipsResourceOnlyComponent covers F-09. A component with no
+// patches builds green standalone today; it must still be skipped, because the
+// classification is by declared kind and never by whether this particular
+// component happens to survive a standalone build.
+func TestNotBuildTargetsSkipsResourceOnlyComponent(t *testing.T) {
+	kf := componentFixture(t, "kustomization.yaml",
+		"apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\nresources:\n  - cm.yaml\n")
+
+	got := NotBuildTargets([]KustomizeFile{kf})
+	if got[kf.Dir] != ComponentSkipReason {
+		t.Errorf("resource-only component: got %q, want %q", got[kf.Dir], ComponentSkipReason)
+	}
+}
+
+// TestNotBuildTargetsNeverSkipsMultiFileDirectory covers F-07. kustomize rejects
+// a directory holding more than one kustomization file outright, so skipping it
+// would convert a hard kustomize error into a green check. That is a false pass,
+// which this repo rates worse than a false fail.
+func TestNotBuildTargetsNeverSkipsMultiFileDirectory(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"kustomization.yaml": "apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\n",
+		"Kustomization":      "apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\n",
+	}
+
+	var parsed []KustomizeFile
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+		kf, _ := New().(*discoverer).ParseKustomization(path)
+		parsed = append(parsed, *kf)
+	}
+
+	if got := NotBuildTargets(parsed); len(got) != 0 {
+		t.Errorf("directory with two kustomization files must not be skipped, got %v", got)
+	}
+}
+
+// TestNotBuildTargetsIgnoresUnparseableFiles covers F-06: a file we could not
+// decode has no kind, so it is built and kustomize gives the diagnostic.
+func TestNotBuildTargetsIgnoresUnparseableFiles(t *testing.T) {
+	kf := componentFixture(t, "kustomization.yaml", "kind: Component\n  bad: [indent\n")
+	if !kf.Unparsed {
+		t.Fatalf("fixture should be unparseable, got Unparsed=false kind=%q", kf.Kind)
+	}
+
+	if got := NotBuildTargets([]KustomizeFile{kf}); len(got) != 0 {
+		t.Errorf("unparseable file must fail open to kustomize, got %v", got)
+	}
+}
+
+// TestComponentSkipReasonIsDistinctFromRemoval covers F-10 and F-23: the reason
+// is a public surface and must never collapse into the removal wording, or the
+// report tells users a component was deleted.
+func TestComponentSkipReasonIsDistinctFromRemoval(t *testing.T) {
+	for _, removal := range []string{
+		"removed in this change",
+		"removed in this change (empty directory)",
+	} {
+		if ComponentSkipReason == removal {
+			t.Errorf("component skip reason must differ from removal reason %q", removal)
+		}
+	}
+
+	// F-11: the reason must not claim validation happened elsewhere. An orphan
+	// component is validated nowhere, so such a claim would be false in exactly
+	// the case that matters.
+	for _, forbidden := range []string{"validated", "included by", "covered by"} {
+		if strings.Contains(strings.ToLower(ComponentSkipReason), forbidden) {
+			t.Errorf("skip reason %q must not claim validation (contains %q)", ComponentSkipReason, forbidden)
+		}
 	}
 }
