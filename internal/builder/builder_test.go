@@ -256,3 +256,76 @@ func TestTimeoutIsPerBuildNotPerRun(t *testing.T) {
 		}
 	}
 }
+
+// TestRemovalReasonWinsOverNotBuildTarget covers F-05. A deleted component
+// directory must report that it was removed, not what it used to be: a path
+// that no longer exists has no kustomization file to have a kind, so claiming
+// "Component" would be asserting something we cannot know.
+func TestRemovalReasonWinsOverNotBuildTarget(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "deleted-component")
+
+	b := New()
+	b.SetNotBuildTargets(map[string]string{missing: "kustomize Component, not a standalone build target"})
+
+	result := b.Build(missing, false)
+
+	if !result.Skipped {
+		t.Fatalf("removed path should be skipped, got %+v", result)
+	}
+	if result.SkipReason != "removed in this change" {
+		t.Errorf("SkipReason = %q, want the removal reason", result.SkipReason)
+	}
+}
+
+// TestNotBuildTargetSkipsWithoutRunningKustomize covers F-01: a classified path
+// produces a skip with empty Output and Error, exactly like the removal skips,
+// and kustomize is never invoked.
+func TestNotBuildTargetSkipsWithoutRunningKustomize(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"),
+		[]byte("apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	const reason = "kustomize Component, not a standalone build target"
+	// A command that cannot exist: if the builder ran it, the test fails loudly
+	// rather than silently passing because kustomize happened to succeed.
+	b := &builder{timeout: time.Minute, grace: defaultWaitGrace, command: "kustomize-build-check-must-not-exec"}
+	b.SetNotBuildTargets(map[string]string{dir: reason})
+
+	result := b.Build(dir, false)
+
+	if !result.Skipped || result.Success {
+		t.Fatalf("want skipped and not successful, got %+v", result)
+	}
+	if result.SkipReason != reason {
+		t.Errorf("SkipReason = %q, want %q", result.SkipReason, reason)
+	}
+	if result.Output != "" || result.Error != "" {
+		t.Errorf("skip must carry no output or error, got Output=%q Error=%q", result.Output, result.Error)
+	}
+}
+
+// TestUnclassifiedDirectoryStillBuilds guards the other side of F-04: an empty
+// or nil classification map must not turn every path into a skip.
+func TestUnclassifiedDirectoryStillBuilds(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"),
+		[]byte("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for name, reasons := range map[string]map[string]string{
+		"nil map":    nil,
+		"empty map":  {},
+		"other path": {filepath.Join(t.TempDir(), "elsewhere"): "kustomize Component, not a standalone build target"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := New()
+			b.SetNotBuildTargets(reasons)
+			if got := b.Build(dir, false); got.Skipped {
+				t.Errorf("unclassified directory must be built, got skip %q", got.SkipReason)
+			}
+		})
+	}
+}

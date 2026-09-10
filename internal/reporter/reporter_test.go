@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/michielvha/kustomize-build-check/internal/builder"
+	"github.com/michielvha/kustomize-build-check/internal/discovery"
 )
 
 func sampleResults() []builder.BuildResult {
@@ -206,5 +207,41 @@ func TestPrintParseIssuesSilentWhenNone(t *testing.T) {
 	_, _ = buf.ReadFrom(r)
 	if buf.Len() != 0 {
 		t.Errorf("no parse issues must print nothing, got:\n%s", buf.String())
+	}
+}
+
+// TestComponentSkipReasonMatchesDiscovery pins the duplicated constant. The
+// reason travels here as data on a BuildResult, so a rename in discovery would
+// otherwise silently reclassify every component skip as a removal.
+func TestComponentSkipReasonMatchesDiscovery(t *testing.T) {
+	if componentSkipReason != discovery.ComponentSkipReason {
+		t.Fatalf("reporter constant %q has drifted from discovery.ComponentSkipReason %q",
+			componentSkipReason, discovery.ComponentSkipReason)
+	}
+}
+
+// TestSkipSubCountsSumToSkipped covers the O-1 decision: Skipped stays the
+// aggregate and the two sub-counts explain it, the same shape as TimedOut
+// under Failed.
+func TestSkipSubCountsSumToSkipped(t *testing.T) {
+	results := []builder.BuildResult{
+		{Path: "/a", Skipped: true, SkipReason: "removed in this change"},
+		{Path: "/b", Skipped: true, SkipReason: "removed in this change (empty directory)"},
+		{Path: "/c", Skipped: true, SkipReason: discovery.ComponentSkipReason},
+		{Path: "/d", Success: true},
+		{Path: "/e"},
+	}
+
+	got := New().GenerateSummary(results)
+
+	if got.Skipped != 3 || got.SkippedRemoved != 2 || got.SkippedComponent != 1 {
+		t.Errorf("Skipped=%d SkippedRemoved=%d SkippedComponent=%d, want 3/2/1",
+			got.Skipped, got.SkippedRemoved, got.SkippedComponent)
+	}
+	if got.SkippedRemoved+got.SkippedComponent != got.Skipped {
+		t.Error("sub-counts must sum to Skipped")
+	}
+	if got.Total != got.Success+got.Failed+got.Skipped {
+		t.Error("Total must still equal Success + Failed + Skipped")
 	}
 }

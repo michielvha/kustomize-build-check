@@ -34,6 +34,7 @@ type Ref struct {
 type KustomizeFile struct {
 	Path       string   // Absolute path to kustomization.yaml
 	Dir        string   // Directory containing the file
+	Kind       string   // kind field verbatim; empty when absent
 	Resources  []string // Relative paths referenced
 	Bases      []string // Deprecated bases field
 	Components []string // Component paths
@@ -172,6 +173,7 @@ func (d *discoverer) ParseKustomization(path string) (*KustomizeFile, error) {
 	// Stage 2: each field this tool models. An undecodable field costs that
 	// field's references, not the file. Unknown fields are ignored, so a
 	// kustomize feature this tool does not model never fails a build.
+	kf.Kind = decodeString(kf, doc, "kind")
 	kf.Resources = decodeStrings(kf, doc, "resources")
 	kf.Bases = decodeStrings(kf, doc, "bases")
 	kf.Components = decodeStrings(kf, doc, "components")
@@ -335,6 +337,78 @@ func decodeStrings(kf *KustomizeFile, doc map[string]yaml.Node, field string) []
 	if err := node.Decode(&out); err != nil {
 		kf.FieldErrs = append(kf.FieldErrs, FieldError{Field: field, Err: err})
 		return nil
+	}
+	return out
+}
+
+// decodeString decodes a scalar string field, recording a FieldError and
+// yielding "" if it is present but not a string. Same tolerance as
+// decodeStrings: one bad field costs that field, never the file.
+func decodeString(kf *KustomizeFile, doc map[string]yaml.Node, field string) string {
+	node, ok := doc[field]
+	if !ok {
+		return ""
+	}
+
+	var out string
+	if err := node.Decode(&out); err != nil {
+		kf.FieldErrs = append(kf.FieldErrs, FieldError{Field: field, Err: err})
+		return ""
+	}
+	return out
+}
+
+// ComponentKind is the kind a kustomize Component declares.
+const ComponentKind = "Component"
+
+// ComponentSkipReason is the reason reported for a directory that holds a
+// Component. It deliberately does NOT claim the component was validated
+// elsewhere: an orphan component that no kustomization includes is validated
+// nowhere, so such a claim would be false in exactly the case that matters.
+const ComponentSkipReason = "kustomize Component, not a standalone build target"
+
+// IsComponent reports whether this file declares kind: Component.
+//
+// An absent, empty or whitespace-only kind is NOT a component: kustomize
+// defaults to Kustomization, and so does this. Any other kind, including one
+// this tool has never heard of, is likewise not a component — the predicate is
+// an allow-nothing-else list of one.
+func (kf *KustomizeFile) IsComponent() bool {
+	return strings.TrimSpace(kf.Kind) == ComponentKind
+}
+
+// NotBuildTargets maps a directory to the reason it must not be handed to
+// `kustomize build` on its own, for every Component among the discovered files.
+//
+// A Component carries no resource set of its own and its patches resolve
+// against the resources of whatever parent lists it under `components:`, so
+// building one alone fails for any component that carries a patch. It is
+// validated instead through each parent that includes it, which the dependency
+// graph already reaches because it treats `components:` entries as edges.
+//
+// A directory holding MORE THAN ONE kustomization file is never returned,
+// whatever kinds those files declare. kustomize rejects such a directory
+// outright ("Found multiple kustomization files under: <dir>"), so skipping it
+// would convert a hard kustomize error into a green check. Discovery yields one
+// entry per file, so the count is already here and needs no second look at disk.
+//
+// Unparseable files carry an empty Kind and are therefore never classified as
+// components: they fail open to kustomize, which gives a better diagnostic than
+// this package could.
+func NotBuildTargets(files []KustomizeFile) map[string]string {
+	perDir := make(map[string][]KustomizeFile, len(files))
+	for _, kf := range files {
+		perDir[kf.Dir] = append(perDir[kf.Dir], kf)
+	}
+
+	out := make(map[string]string)
+	for dir, entries := range perDir {
+		if len(entries) != 1 {
+			continue
+		}
+		if entries[0].IsComponent() {
+			out[dir] = ComponentSkipReason
+		}
 	}
 	return out
 }

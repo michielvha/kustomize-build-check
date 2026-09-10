@@ -153,6 +153,11 @@ func main() {
 	// 5. Build affected kustomizations
 	fmt.Println("\n🔨 Running kustomize build...")
 	bldr := builder.NewWithTimeout(buildTimeout)
+	// Components are discovered and graphed like any other kustomization, but
+	// they are not standalone build targets. Classifying them here rather than
+	// in the builder keeps the single kustomization parser in internal/discovery
+	// and keeps internal/builder on the standard library.
+	bldr.SetNotBuildTargets(discovery.NotBuildTargets(kustomizations))
 	results := bldr.BuildAll(affectedPaths, enableHelm)
 
 	// 6. Report results
