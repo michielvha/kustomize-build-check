@@ -7,7 +7,7 @@
 #
 # The runtime base ships no wget and no curl, which is the other reason these
 # downloads cannot happen there.
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base@sha256:0a8fd427de5882aed77471b0a432c3675eda6b6a0ae952b5d640b46da628cdbe AS fetch
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base@sha256:1d95114038f76513a9ace6fca107d5582b08c65981f81f61cb56bf7fd2ef216d AS fetch
 
 ARG TARGETARCH
 ARG KUSTOMIZE_VERSION=v5.8.1
@@ -43,7 +43,7 @@ RUN curl -sfL -o helm.tar.gz \
 # out to git, and replacing that with a pure-Go implementation would cost 48
 # extra modules and change behaviour for a partial win. See
 # docs/specs/container-hardening.spec.md.
-FROM cgr.dev/chainguard/wolfi-base@sha256:0a8fd427de5882aed77471b0a432c3675eda6b6a0ae952b5d640b46da628cdbe
+FROM cgr.dev/chainguard/wolfi-base@sha256:1d95114038f76513a9ace6fca107d5582b08c65981f81f61cb56bf7fd2ef216d
 
 ARG IMAGE_NAME
 ARG TARGETOS
