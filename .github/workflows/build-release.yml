@@ -31,14 +31,14 @@ jobs:
     steps:
       # 1: Checkout code (required before using the action)
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0  # Fetch all the history for GitVersion
           persist-credentials: true
 
       # 2: Set up Go for the test run
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
 
@@ -81,13 +81,13 @@ jobs:
       # 5: Call our custom `GitVersion action` to tag the repo
       - name: Tag with GitVersion
         id: gitversion
-        uses: michielvha/gitversion-tag-action@v6
+        uses: michielvha/gitversion-tag-action@af3e2ec1a4f126a5f08c89b8de27032064d196f5 # v6
         with:
           configFilePath: gitversion.yml
 
       # 6: Use the custom build-release action
       - name: Build and Release Go Binary
-        uses: michielvha/goreleaser-action@main
+        uses: michielvha/goreleaser-action@a86fcdf453812a9d69b85208c0cb6a1e73f136b8 # v1
         with:
           # Must match the go directive in go.mod. The action defaults to an
           # older Go and sets GOTOOLCHAIN=local, so it cannot self-upgrade: a
@@ -99,7 +99,7 @@ jobs:
 
       # 7: Build and Push Docker image
       - name: Build and Push Docker Image
-        uses: michielvha/docker-release-action@main
+        uses: michielvha/docker-release-action@c499e52a1a05e5bdd8cf03ba19a423d4c7ec25e3 # v2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
