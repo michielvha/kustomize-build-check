@@ -81,7 +81,7 @@ jobs:
       # 5: Call our custom `GitVersion action` to tag the repo
       - name: Tag with GitVersion
         id: gitversion
-        uses: michielvha/gitversion-tag-action@af3e2ec1a4f126a5f08c89b8de27032064d196f5 # v6
+        uses: michielvha/gitversion-tag-action@8cf5869816cf71437052ac97d086e00526bf2d89 # v7.0.4
         with:
           configFilePath: gitversion.yml
 
