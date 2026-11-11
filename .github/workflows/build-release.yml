@@ -87,7 +87,7 @@ jobs:
 
       # 6: Use the custom build-release action
       - name: Build and Release Go Binary
-        uses: michielvha/goreleaser-action@a86fcdf453812a9d69b85208c0cb6a1e73f136b8 # v1
+        uses: michielvha/goreleaser-action@99d53be595f6e73dbbd9adb136ea4c1cca86fe58 # v2.0.0
         with:
           # Must match the go directive in go.mod. The action defaults to an
           # older Go and sets GOTOOLCHAIN=local, so it cannot self-upgrade: a
