@@ -1,139 +1,64 @@
-# Kustomize Build Check
+# kustomize-build-check
 
 [![Build and Release](https://github.com/michielvha/kustomize-build-check/actions/workflows/build-release.yml/badge.svg)](https://github.com/michielvha/kustomize-build-check/actions/workflows/build-release.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/michielvha/kustomize-build-check)](https://goreportcard.com/report/github.com/michielvha/kustomize-build-check)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-CLI tool for automatically discovering and validating Kustomize overlays with intelligent change detection.
+kustomize-build-check finds the Kustomize overlays a change affects and runs `kustomize build` on each
+of them. This repository holds the Go source and publishes the container image. To run the check in
+GitHub Actions, use [kustomize-build-check-action](https://github.com/michielvha/kustomize-build-check-action).
 
-**Looking to use this in GitHub Actions?** → See the **[kustomize-build-check-action](https://github.com/michielvha/kustomize-build-check-action)** repository.
+## How it works
 
-This repository contains the source code and build pipeline. The action repository provides a clean interface for GitHub Actions users.
+Each stage is one package under `internal/`:
 
-## Overview
+1. `git` lists the files changed between the base ref and `HEAD`.
+2. `discovery` finds and parses every kustomization file under the root directory.
+3. `graph` records which kustomization references which.
+4. `analyzer` marks the kustomizations a changed file belongs to or is referenced by, plus everything
+   that depends on them.
+5. `builder` runs `kustomize build` on the marked paths.
+6. `reporter` prints the results and writes the GitHub Actions outputs and step summary.
 
-Intelligently validates Kustomize configurations by:
-- 🔍 Auto-discovering all Kustomize files and their dependencies
-- 🧠 Smart testing based on what changed (bases → all overlays, overlays → just that one)
-- ⚡ Helm chart support with `--enable-helm`
-- 📊 Clear build results and error reporting
-- ⏭️ Skipping paths the change removed, so deleting or renaming a directory does not fail the check
-
-## Architecture
-
-See [design.md](design.md) for detailed architecture documentation.
-
-**Repository Structure:**
-- **Tool Repository** (this one): Go source, binaries, Docker images
-- **Action Repository**: GitHub Action interface referencing GHCR images generated via source code repository
-
-**Release Pipeline:**
-1. Push to `main` → GitVersion tags the repo
-2. GoReleaser builds multi-platform binaries
-3. Docker images built for linux/amd64 and linux/arm64
-4. Published to GitHub Releases + GHCR
+[design.md](design.md) describes the design. The behavior specifications are in [docs/specs](docs/specs/)
+and the architecture decisions in [docs/decisions](docs/decisions/).
 
 ## Development
 
-### Prerequisites
-- Go 1.23+
-- Docker (for testing containers)
-- Kustomize CLI
-
-### Building
+You need the Go version in [go.mod](go.mod). The integration tests build real repositories, so they
+also need `git` and `kustomize` on `PATH`, and skip themselves when `kustomize` is missing.
 
 ```bash
-# Build binary
 go build -o kustomize-build-check ./cmd/action
-
-# Run tests
-# The integration tests build real repositories, so they need git and the
-# kustomize CLI on PATH. They skip themselves if kustomize is missing.
 go test ./...
-
-# Build Docker image locally
-docker build -f Dockerfile -t kustomize-build-check:dev .
+docker build -t kustomize-build-check:dev .
 ```
 
-### Running Locally
+The binary reads its inputs from the `INPUT_*` variables GitHub Actions sets, such as `INPUT_BASE-REF`
+and `INPUT_ROOT-DIR`. [cmd/action/main.go](cmd/action/main.go) reads them all with their defaults. The
+names contain hyphens, which `export` rejects, so pass them with `env`:
 
 ```bash
-# Set environment variables (simulates GitHub Actions)
-export INPUT_BASE-REF="HEAD~1"
-export INPUT_ENABLE-HELM="true"
-export INPUT_ROOT-DIR="."
-
-# Run the binary
-./kustomize-build-check
-
-# Enable debug logging
-LOG_LEVEL=DEBUG ./kustomize-build-check
+env 'INPUT_BASE-REF=HEAD~1' 'INPUT_ROOT-DIR=.' ./kustomize-build-check
 ```
 
-### Logging
+Outside GitHub Actions the results go to the terminal only. Set `LOG_LEVEL` to `DEBUG`, `INFO` (the
+default), `WARN` or `ERROR`. At `DEBUG` the tool logs how it built the dependency graph and which
+reference made each kustomization count as affected.
 
-The tool supports structured logging with configurable log levels via the `LOG_LEVEL` environment variable:
+## Releases
 
-- **`INFO`** (default): Shows standard progress output
-- **`DEBUG`**: Detailed execution information including:
-  - Dependency graph construction
-  - Impact analysis decisions
-  - File processing steps
-  - Kustomize build commands and results
-- **`WARN`**: Warnings only
-- **`ERROR`**: Errors only
+A push to `main` cuts a release unless it only touches documentation (see `paths-ignore` in
+[build-release.yml](.github/workflows/build-release.yml)). GitVersion tags the commit, with the version bump taken from the
+conventional commit messages (see [gitversion.yml](gitversion.yml)). GoReleaser then publishes
+binaries for Linux, macOS and Windows on amd64 and arm64 to GitHub Releases, and the workflow pushes a
+linux/amd64 and linux/arm64 image to `ghcr.io/michielvha/kustomize-build-check`.
 
-**Example with debug logging:**
-```bash
-LOG_LEVEL=DEBUG ./kustomize-build-check
-```
-
-This will show detailed logs like:
-```
-time=2025-11-06T22:23:21.497+01:00 level=DEBUG msg="Building dependency graph" kustomization_count=23
-time=2025-11-06T22:23:21.497+01:00 level=DEBUG msg="Found dependencies" kustomization=/path/to/overlay dependencies=[../../base]
-time=2025-11-06T22:23:21.497+01:00 level=DEBUG msg="Added reverse lookup" base=/path/to/base dependent=/path/to/overlay
-```
-
-### Project Structure
-
-```
-.
-├── cmd/action/          # Main entry point
-├── internal/
-│   ├── analyzer/        # Impact analysis
-│   ├── builder/         # Kustomize build execution
-│   ├── discovery/       # Find kustomization files
-│   ├── git/             # Git operations
-│   ├── graph/           # Dependency graph
-│   └── reporter/        # Results output
-├── .goreleaser.yml      # Multi-platform binary builds
-├── Dockerfile           # Production multi-arch image
-└── design.md            # Architecture documentation
-```
-
-## Release Process
-
-Releases are automated via GitHub Actions using custom composite actions:
-
-1. **Push to `main`** → Triggers [build-release.yml](.github/workflows/build-release.yml)
-2. **GitVersion** → Creates semantic version tag
-3. **GoReleaser** → Builds binaries for all platforms
-4. **Docker** → Builds and pushes multi-arch images to GHCR
-5. **Action Repo** → Update to reference new version (manual)
+The action repository pins the image by commit SHA. Action users get a release only after that pin is
+bumped in its `action.yml`.
 
 ## Contributing
 
-Contributions welcome!
-
-1. Check [design.md](design.md) for architecture details
-2. Fork the repository
-3. Create a feature branch (`feat/my-feature`)
-4. Make your changes with tests
-5. Use conventional commits (`feat:`, `fix:`, `chore:`)
-6. Submit a pull request
-
-## Related Projects
-
-- [kustomize-build-check-action](https://github.com/michielvha/kustomize-build-check-action) - GitHub Action interface
-- [kustomize](https://github.com/kubernetes-sigs/kustomize) - Kubernetes native configuration management
+Behavior changes start with a specification in [docs/specs](docs/specs/). Use conventional commit
+messages, since they decide the next version. Report bugs and request features in this repository's
+[issues](https://github.com/michielvha/kustomize-build-check/issues).
