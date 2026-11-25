@@ -8,7 +8,7 @@ branding:
 
 inputs:
   base-ref:
-    description: 'Base git reference to compare against (default: github.event.pull_request.base.sha or main)'
+    description: 'Base git reference to compare against. When empty, HEAD~1 (the last commit only); pass github.event.pull_request.base.sha to check a whole pull request'
     required: false
     default: ''
   
@@ -16,11 +16,6 @@ inputs:
     description: 'Enable Helm chart inflation in Kustomize builds'
     required: false
     default: 'true'
-  
-  kustomize-version:
-    description: 'Version of Kustomize to use'
-    required: false
-    default: 'latest'
   
   fail-on-error:
     description: 'Fail the workflow if any Kustomize build fails'
